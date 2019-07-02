@@ -1,0 +1,7 @@
+/Debug/
+/Release/
+.xdchelp
+/.config/
+/.launches/
+
+*.zip
