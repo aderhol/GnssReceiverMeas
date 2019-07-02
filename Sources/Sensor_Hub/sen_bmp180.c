@@ -36,6 +36,8 @@ static volatile EventGroupHandle_t flags; //<0>: sensor is initialized, <1>: dat
 static const EventBits_t sensorIsInitialized = ((EventBits_t) 1) << 0;
 static void init_task(void* pvParameters);
 
+static volatile SemaphoreHandle_t sensorMutex;
+
 static volatile bool initError; //true if initialization was unsuccessful
 
 //calibration parameters
@@ -56,6 +58,8 @@ void bmp180Init(void)
 
     flags = xEventGroupCreate();
     xEventGroupClearBits(flags, sensorIsInitialized);
+
+    sensorMutex = xSemaphoreCreateMutex();
 }
 
 
@@ -141,62 +145,47 @@ bool bmp180GetData(float* temperature_C, float* pressure_Pa)
         int_fast8_t failCnt;
 
 
-        for(failCnt = 0; failCnt < 5; failCnt++){
-            OK = senHubI2cWriteReg(BMP180_I2C_ADDRESS, BMP180_CONTROL_REG_ADDRESS, BMP180_CONTROL_START_TEMP_COMMAND); //start temperature measurement
-
-            if(OK){ //if the measurement was started successfully
-                break; //go to next step
-            }
-            else
-            {
-                vTaskDelay(pdMS_TO_TICKS(1)); //wait a little and then try again
-            }
-        }
-
-        if(OK){ //if the temperature measurement was initiated successfully
-            const int_fast8_t tempConversionTime = 10;
-            vTaskDelay(pdMS_TO_TICKS(tempConversionTime)); //wait for conversion
-
-            //wait for the conversion to be ready
+        xSemaphoreTake(sensorMutex, portMAX_DELAY); //take the mutex protecting the sensor
+        {
             for(failCnt = 0; failCnt < 5; failCnt++){
-                uint8_t cntrRegSco_temp;
-                OK = (1 == senHubI2cReadReg(BMP180_I2C_ADDRESS, BMP180_CONTROL_REG_ADDRESS, &cntrRegSco_temp, 1)); //get the SCO bit (0 if the conversion has finished)
+                OK = senHubI2cWriteReg(BMP180_I2C_ADDRESS, BMP180_CONTROL_REG_ADDRESS, BMP180_CONTROL_START_TEMP_COMMAND); //start temperature measurement
 
-                OK = OK && (0 ==(cntrRegSco_temp & BMP180_CONTROL_SCO_BIT)); //if the I2C operation was successful AND the SCO bit is 0
-
-                if(OK){ //if the conversion is ready
+                if(OK){ //if the measurement was started successfully
                     break; //go to next step
                 }
-                else{
-                    vTaskDelay(pdMS_TO_TICKS(1)); //wait a little
+                else
+                {
+                    vTaskDelay(pdMS_TO_TICKS(1)); //wait a little and then try again
                 }
             }
 
-            if(OK){ //if the conversion of the temperature was successfully completed
-                uint8_t rawTemp[2];
-                for(failCnt = 0; failCnt < 5; failCnt++){
-                    const size_t tempDatByteCnt = 2;
-                    size_t rawTempCnt = senHubI2cReadReg(BMP180_I2C_ADDRESS, BMP180_DAT_REG_START_ADDRESS, rawTemp, tempDatByteCnt); //get raw temperature measurement
-                    OK = (tempDatByteCnt == rawTempCnt);
+            if(OK){ //if the temperature measurement was initiated successfully
+                const int_fast8_t tempConversionTime = 4; //empirical value
+                vTaskDelay(pdMS_TO_TICKS(tempConversionTime)); //wait for conversion
 
-                    if(OK){ //if all the temperature data was read
+                //wait for the conversion to be ready
+                for(failCnt = 0; failCnt < 5; failCnt++){
+                    uint8_t cntrRegSco_temp;
+                    OK = (1 == senHubI2cReadReg(BMP180_I2C_ADDRESS, BMP180_CONTROL_REG_ADDRESS, &cntrRegSco_temp, 1)); //get the SCO bit (0 if the conversion has finished)
+
+                    OK = OK && (0 ==(cntrRegSco_temp & BMP180_CONTROL_SCO_BIT)); //if the I2C operation was successful AND the SCO bit is 0
+
+                    if(OK){ //if the conversion is ready
                         break; //go to next step
                     }
-                    else
-                    {
-                        vTaskDelay(pdMS_TO_TICKS(1)); //wait a little and then try again
+                    else{
+                        vTaskDelay(pdMS_TO_TICKS(1)); //wait a little
                     }
                 }
 
-                if(OK){ //if the raw temperature data was read successfully
-                    //concatenate the temperature data bytes
-                    int64_t UT = ((uint32_t)((uint32_t)(((uint32_t)rawTemp[0]) << 8))
-                            | ((uint32_t)rawTemp[1]));
-
+                if(OK){ //if the conversion of the temperature was successfully completed
+                    uint8_t rawTemp[2];
                     for(failCnt = 0; failCnt < 5; failCnt++){
-                        OK = senHubI2cWriteReg(BMP180_I2C_ADDRESS, BMP180_CONTROL_REG_ADDRESS, BMP180_CONTROL_START_PRESSURE_COMMAND); //start pressure measurement
+                        const size_t tempDatByteCnt = 2;
+                        size_t rawTempCnt = senHubI2cReadReg(BMP180_I2C_ADDRESS, BMP180_DAT_REG_START_ADDRESS, rawTemp, tempDatByteCnt); //get raw temperature measurement
+                        OK = (tempDatByteCnt == rawTempCnt);
 
-                        if(OK){ //if the measurement was started successfully
+                        if(OK){ //if all the temperature data was read
                             break; //go to next step
                         }
                         else
@@ -205,126 +194,145 @@ bool bmp180GetData(float* temperature_C, float* pressure_Pa)
                         }
                     }
 
-                    if(OK){ //if the pressure conversion was started successfully
-                        //determines conversion time depending on the over-sampling setup
-                        int_fast8_t pressureConversionTime;
-                        switch(oss){
-                        case 0:
-                            pressureConversionTime = 6;
-                            break;
+                    if(OK){ //if the raw temperature data was read successfully
+                        //concatenate the temperature data bytes
+                        int64_t UT = ((uint32_t)((uint32_t)(((uint32_t)rawTemp[0]) << 8))
+                                | ((uint32_t)rawTemp[1]));
 
-                        case 1:
-                            pressureConversionTime = 10;
-                            break;
-
-                        case 2:
-                            pressureConversionTime = 16;
-                            break;
-
-                        case 3:
-                            pressureConversionTime = 30;
-                            break;
-
-                        default:
-                            while(true){ //invalid oss value
-                            }
-                            break;
-                        }
-
-                        vTaskDelay(pdMS_TO_TICKS(pressureConversionTime)); //wait for the conversion to complete
-
-                        //wait for the conversion to be ready
                         for(failCnt = 0; failCnt < 5; failCnt++){
-                            uint8_t cntrRegSco_pressure;
-                            OK = (1 == senHubI2cReadReg(BMP180_I2C_ADDRESS, BMP180_CONTROL_REG_ADDRESS, &cntrRegSco_pressure, 1)); //get the SCO bit (0 if the conversion has finished)
+                            OK = senHubI2cWriteReg(BMP180_I2C_ADDRESS, BMP180_CONTROL_REG_ADDRESS, BMP180_CONTROL_START_PRESSURE_COMMAND); //start pressure measurement
 
-                            OK = OK && (0 ==(cntrRegSco_pressure & BMP180_CONTROL_SCO_BIT)); //if the I2C operation was successful AND the SCO bit is 0
-
-                            if(OK){ //if the conversion is ready
+                            if(OK){ //if the measurement was started successfully
                                 break; //go to next step
                             }
-                            else{
-                                vTaskDelay(pdMS_TO_TICKS(1)); //wait a little
+                            else
+                            {
+                                vTaskDelay(pdMS_TO_TICKS(1)); //wait a little and then try again
                             }
                         }
 
-                        if(OK){ //if the conversion was successfully completed
-                            uint8_t rawPressure[3];
+                        if(OK){ //if the pressure conversion was started successfully
+                            //determines conversion time depending on the over-sampling setup
+                            int_fast8_t pressureConversionTime;
+                            switch(oss){
+                            case 0:
+                                pressureConversionTime = 4;
+                                break;
+
+                            case 1:
+                                pressureConversionTime = 7;
+                                break;
+
+                            case 2:
+                                pressureConversionTime = 13;
+                                break;
+
+                            case 3:
+                                pressureConversionTime = 17; //empirical value
+                                break;
+
+                            default:
+                                while(true){ //invalid oss value
+                                }
+                                break;
+                            }
+
+                            vTaskDelay(pdMS_TO_TICKS(pressureConversionTime)); //wait for the conversion to complete
+
+                            //wait for the conversion to be ready
                             for(failCnt = 0; failCnt < 5; failCnt++){
-                                const size_t pressureDatByteCnt = 3;
-                                size_t rawPressureCnt = senHubI2cReadReg(BMP180_I2C_ADDRESS, BMP180_DAT_REG_START_ADDRESS, rawPressure, pressureDatByteCnt); //get raw pressure data
+                                uint8_t cntrRegSco_pressure;
+                                OK = (1 == senHubI2cReadReg(BMP180_I2C_ADDRESS, BMP180_CONTROL_REG_ADDRESS, &cntrRegSco_pressure, 1)); //get the SCO bit (0 if the conversion has finished)
 
-                                OK = (pressureDatByteCnt == rawPressureCnt);
+                                OK = OK && (0 ==(cntrRegSco_pressure & BMP180_CONTROL_SCO_BIT)); //if the I2C operation was successful AND the SCO bit is 0
 
-                                if(OK){ //if all the pressure data was read
+                                if(OK){ //if the conversion is ready
                                     break; //go to next step
                                 }
-                                else
-                                {
-                                    vTaskDelay(pdMS_TO_TICKS(1)); //wait a little and then try again
+                                else{
+                                    vTaskDelay(pdMS_TO_TICKS(1)); //wait a little
                                 }
                             }
 
-                            if(OK){ //if the raw pressure data was read successfully
-                                measOK = true; //the measurement was successful (the I2C is no lonnger needed)
+                            if(OK){ //if the conversion was successfully completed
+                                uint8_t rawPressure[3];
+                                for(failCnt = 0; failCnt < 5; failCnt++){
+                                    const size_t pressureDatByteCnt = 3;
+                                    size_t rawPressureCnt = senHubI2cReadReg(BMP180_I2C_ADDRESS, BMP180_DAT_REG_START_ADDRESS, rawPressure, pressureDatByteCnt); //get raw pressure data
 
-                                //concatenate bytes
-                                int64_t UP = (uint32_t)(((((uint32_t)(((uint32_t)rawPressure[0]) << 16))
-                                        | ((uint32_t)(((uint32_t)rawPressure[1]) << 8))
-                                        | ((uint32_t)rawPressure[2])) >> (8 - oss)));
+                                    OK = (pressureDatByteCnt == rawPressureCnt);
+
+                                    if(OK){ //if all the pressure data was read
+                                        break; //go to next step
+                                    }
+                                    else
+                                    {
+                                        vTaskDelay(pdMS_TO_TICKS(1)); //wait a little and then try again
+                                    }
+                                }
+
+                                if(OK){ //if the raw pressure data was read successfully
+                                    measOK = true; //the measurement was successful (the I2C is no lonnger needed)
+
+                                    //concatenate bytes
+                                    int64_t UP = (uint32_t)(((((uint32_t)(((uint32_t)rawPressure[0]) << 16))
+                                            | ((uint32_t)(((uint32_t)rawPressure[1]) << 8))
+                                            | ((uint32_t)rawPressure[2])) >> (8 - oss)));
 
 
-                                //calculating compensated valued (temperature and pressure) based on the data sheet
-                                //(I have no idea what's happening, code was written based on the datasheet and the Bosch written driver)
+                                    //calculating compensated valued (temperature and pressure) based on the data sheet
+                                    //(I have no idea what's happening, code was written based on the datasheet and the Bosch written driver)
 
-                                int64_t X1, X2, X3; //intermediate variables
+                                    int64_t X1, X2, X3; //intermediate variables
 
-                                //calculating the temperature
-                                X1 = ((UT - AC6) * AC5) / (((int64_t)1u) << 15);
-                                X2 = (MC * (((int64_t)1u) << 11)) / (X1 + MD);
-                                int64_t B5 = X1 + X2;
-                                *temperature_C = 0.1f * ((B5 + 8u) / (((int64_t)1u) << 4)); //saving the temperature value to the output variable
+                                    //calculating the temperature
+                                    X1 = ((UT - AC6) * AC5) / (((int64_t)1u) << 15);
+                                    X2 = (MC * (((int64_t)1u) << 11)) / (X1 + MD);
+                                    int64_t B5 = X1 + X2;
+                                    *temperature_C = 0.1f * ((B5 + 8u) / (((int64_t)1u) << 4)); //saving the temperature value to the output variable
 
-                                //calculating the compensated pressure
-                                int64_t B6 = B5 - 4000;
-                                X1 = (B2 * ((B6 * B6) / (((int64_t)1u) << 12))) / (((int64_t)1u) << 11);
-                                X2 = (AC2 * B6) / (((int64_t)1u) << 11);
-                                X3 = X1 + X2;
-                                int64_t B3 = (((((int64_t)AC1 * 4) + X3) << oss) + 2) / 4;
-                                X1 = (AC3 * B6) / (((int64_t)1u) << 13);
-                                X2 = (B1 * ((B6 * B6) / (((int64_t)1u) << 12))) / (((int64_t)1u) << 16);
-                                X3 = ((X1 + X2) + 2) / (((int64_t)1u) << 2);
-                                uint64_t B4 = (AC4 * ((uint64_t)(X3 + 32768))) / (((uint64_t)1u) << 15);
-                                uint64_t B7 = (((uint64_t)UP) - B3) * (50000u >> oss);
-                                uint64_t p = (B7 < 0x80000000) ? ((B7 * 2) / B4) : ((B7 / B4) * 2);
-                                X1 = (p / (((uint64_t)1u) << 8)) * (p / (((uint64_t)1u) << 8));
-                                X1 = (X1 * 3038) / (((int64_t)1u) << 16);
-                                X2 = ((int64_t)((-7357 * p) / (((int64_t)1u) << 16))); //I know, it changes sign, what can you do...
-                                *pressure_Pa = (int32_t)(p + ((X1 + X2 + 3791) / (((int64_t)1u) << 4))); //saving the pressure value to the output variable
+                                    //calculating the compensated pressure
+                                    int64_t B6 = B5 - 4000;
+                                    X1 = (B2 * ((B6 * B6) / (((int64_t)1u) << 12))) / (((int64_t)1u) << 11);
+                                    X2 = (AC2 * B6) / (((int64_t)1u) << 11);
+                                    X3 = X1 + X2;
+                                    int64_t B3 = (((((int64_t)AC1 * 4) + X3) << oss) + 2) / 4;
+                                    X1 = (AC3 * B6) / (((int64_t)1u) << 13);
+                                    X2 = (B1 * ((B6 * B6) / (((int64_t)1u) << 12))) / (((int64_t)1u) << 16);
+                                    X3 = ((X1 + X2) + 2) / (((int64_t)1u) << 2);
+                                    uint64_t B4 = (AC4 * ((uint64_t)(X3 + 32768))) / (((uint64_t)1u) << 15);
+                                    uint64_t B7 = (((uint64_t)UP) - B3) * (50000u >> oss);
+                                    uint64_t p = (B7 < 0x80000000) ? ((B7 * 2) / B4) : ((B7 / B4) * 2);
+                                    X1 = (p / (((uint64_t)1u) << 8)) * (p / (((uint64_t)1u) << 8));
+                                    X1 = (X1 * 3038) / (((int64_t)1u) << 16);
+                                    X2 = ((int64_t)((-7357 * p) / (((int64_t)1u) << 16))); //I know, it changes sign, what can you do...
+                                    *pressure_Pa = (int32_t)(p + ((X1 + X2 + 3791) / (((int64_t)1u) << 4))); //saving the pressure value to the output variable
+                                }
+                                else{ //if the raw pressure data couldn't be read
+                                    measOK = false;
+                                }
                             }
-                            else{ //if the raw pressure data couldn't be read
+                            else{ //if the completion of the pressure measurement couldn't be verified
                                 measOK = false;
                             }
                         }
-                        else{ //if the completion of the pressure measurement couldn't be verified
+                        else{ //if the pressure conversion couldn't be started
                             measOK = false;
                         }
                     }
-                    else{ //if the pressure conversion couldn't be started
+                    else{ //if the raw temperature data couldn't be read
                         measOK = false;
                     }
                 }
-                else{ //if the raw temperature data couldn't be read
+                else{ //if the completion of the temperature measurement couldn't be verified
                     measOK = false;
                 }
             }
-            else{ //if the completion of the temperature measurement couldn't be verified
+            else{ //if the temperature measurement couldn't be initiated
                 measOK = false;
             }
         }
-        else{ //if the temperature measurement couldn't be initiated
-            measOK = false;
-        }
+        xSemaphoreGive(sensorMutex); //release the mutex on the sensor
     }
     else{ //if the sensor initialization has failed
         measOK = false;
