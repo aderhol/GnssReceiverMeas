@@ -90,7 +90,7 @@ void I2C7_ISR(void)
     portYIELD_FROM_ISR(higherPriorityTaskWoken); //return to the higher priority (than the currently interrupted) task from the ISR, if one has been woken
 }
 
-size_t senHubI2cWrite(uint8_t slaveAddress, uint8_t values[], size_t length)
+size_t senHubI2cWrite(uint8_t slaveAddress, const uint8_t values[], size_t length)
 {
 #ifdef DEBUG
     while(0 == length){

@@ -47,15 +47,22 @@ int main(void)
 static void tester_task(void* pvParameters)
 {
     while(true){
-        float temp, pressure;
-        bool bmp180_OK = bmp180GetData(&temp, &pressure);
+        float temp_bmp, pressure;
+        bool bmp180_OK = bmp180GetData(&temp_bmp, &pressure);
 
         float als;
         uint16_t ir;
         bool isl29023_OK = isl29023GetData(&als, &ir);
 
-        char str[100];
-        sprintf(str, "OK: %d\t\ttemperature: %.1f °C\tpressure: %.0f Pa\t\t\t\tOK: %d\t\tals: %.2f lx\tir: %d", bmp180_OK, temp, pressure, isl29023_OK, als, ir);
+        float temp_sht, humidity;
+        bool sht21_OK = sht21GetData(&temp_sht, &humidity);
+
+        char str[200];
+        sprintf(str, "OK: %d\t\ttemperature: %.1f °C\tpressure: %.0f Pa\t\t\t\tOK: %d\t\tals: %.2f lx\tir: %d\t\t\t\tOK: %d\t\ttemperature: %.2f °C\tRH: %.2f%%",
+                bmp180_OK, temp_bmp, pressure,
+                isl29023_OK, als, ir,
+                sht21_OK, temp_sht, humidity
+                );
         uartPrintLn(usb, str);
 
         vTaskDelay(pdMS_TO_TICKS(500));

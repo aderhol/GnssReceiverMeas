@@ -256,7 +256,7 @@ static bool measAls(float* als)
     return measOK;
 }
 
-bool isl29023GetData(float* als, uint16_t* ir)
+bool isl29023GetData(float* als_lx, uint16_t* ir)
 {
     bool measOK;
 
@@ -274,7 +274,7 @@ bool isl29023GetData(float* als, uint16_t* ir)
 
         xSemaphoreTake(sensorMutex, portMAX_DELAY); //take the mutex protecting the sensor
         {
-            OK = measAls(als); //measure ALS
+            OK = measAls(als_lx); //measure ALS
 
             if(OK){ //if the ALS was measured successfully
                 //measure IR

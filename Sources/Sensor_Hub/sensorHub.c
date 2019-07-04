@@ -11,7 +11,7 @@
 #include <senHubI2c.h>
 #include <sen_bmp180.h>
 #include <sen_ISL29023.h>
-//#include <sen_sht21.h>
+#include <sen_sht21.h>
 
 
 
@@ -26,5 +26,5 @@ void sensorHubInit(void)
 
     bmp180Init(); //temperature and pressure
     isl29023Init(); //visible and IR light intensity
-    //sht21Init(&sensorI2C); //relative humidity and temperature
+    sht21Init(); //relative humidity and temperature
 }

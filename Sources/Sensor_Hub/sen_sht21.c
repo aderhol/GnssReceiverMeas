@@ -9,212 +9,245 @@
 #include <task.h>
 
 //driver includes
-#include <sensorlib/hw_sht21.h>
-#include <sensorlib/i2cm_drv.h>
-#include <sensorlib/sht21.h>
 
 //user includes
+#include <senHubI2c.h>
 #include <sen_sht21.h>
 
 
 
 //configurations
-static const uint_fast8_t SHT21_I2C_ADDRESS = 0x40;
+static const uint8_t SHT21_I2C_ADDRESS = 0x40;
 
-static void initSensor(tI2CMInstance* sensorI2C);
-static tSHT21 sensor;
-static EventGroupHandle_t flags; //<0>: sensor is initialized, <1>: data is ready
+static const uint8_t SHT21_START_TEMPERATURE_MEASUREMENT_NO_HOLD = 0xF3;
+static const uint8_t SHT21_START_HUMIDITY_MEASUREMENT_NO_HOLD = 0xF5;
+static const uint8_t SHT21_START_TEMPERATURE_MEASUREMENT_HOLD = 0xE3;
+static const uint8_t SHT21_START_HUMIDITY_MEASUREMENT_HOLD = 0xE5;
+
+static const uint8_t SHT21_USER_REG_ADDRESS_WRITE = 0xE6;
+static const uint8_t SHT21_USER_REG_ADDRESS_READ = 0xE7;
+static const uint8_t SHT21_RESOLUTION_M = 0x81;
+static const uint8_t SHT21_RESOLUTION_T14_RH12 = 0x00;
+static const uint8_t SHT21_RESOLUTION_T12_RH8 = 0x01;
+static const uint8_t SHT21_RESOLUTION_T13_RH10 = 0x80;
+static const uint8_t SHT21_RESOLUTION_T11_RH11 = 0x81;
+static const uint8_t SHT21_HEATER_M = 0x04;
+static const uint8_t SHT21_HEATER_ON = 0x04;
+static const uint8_t SHT21_HEATER_OFF = 0x00;
+
+static const uint8_t SHT21_RESET = 0xFE;
+
+static volatile EventGroupHandle_t flags; //<0>: sensor is initialized, <1>: data is ready
 static const EventBits_t sensorIsInitialized = ((EventBits_t) 1) << 0;
-static void initCallback(void* pvData, uint_fast8_t status);
-static void initSensor(tI2CMInstance* sensorI2C);
-static void setUpCallback(void* pvData, uint_fast8_t status);
-static SemaphoreHandle_t sensorMutex;
-static SemaphoreHandle_t conversionStarted;
-static SemaphoreHandle_t dataReady;
 
-void sht21Init(tI2CMInstance* sensorI2C)
+static volatile SemaphoreHandle_t sensorMutex;
+
+static void init_task(void* pvParameters);
+
+static volatile bool initError; //true if initialization was unsuccessful
+
+void sht21Init()
 {
-    initSensor(sensorI2C);
+    TaskHandle_t initTaskHandle;
+    xTaskCreate(&init_task,
+                "SHT21_initTask",
+                configMINIMAL_STACK_SIZE,
+                NULL,
+                (configMAX_PRIORITIES - 1),
+                &initTaskHandle);
 
     flags = xEventGroupCreate();
     xEventGroupClearBits(flags, sensorIsInitialized);
 
     sensorMutex = xSemaphoreCreateMutex();
-
-    conversionStarted = xSemaphoreCreateBinary();
-    xSemaphoreTake(conversionStarted, 0);
-
-    dataReady = xSemaphoreCreateBinary();
-    xSemaphoreTake(dataReady, 0);
 }
 
-static void initSensor(tI2CMInstance* sensorI2C)
+static void init_task(void* pvParameters)
 {
-    static tI2CMInstance* sensorI2C_ = NULL;
-    sensorI2C_ = (sensorI2C_ == NULL) ? sensorI2C : sensorI2C_; //back up for possible retry due to I2C error
+    vTaskDelay(pdMS_TO_TICKS(16)); //wait for the sensor to start up after power on
 
-    //initializes the driver
-    SHT21Init(&sensor,
-              sensorI2C_,
-              SHT21_I2C_ADDRESS,
-              &initCallback,
-              NULL);
+    bool OK;
+    int_fast8_t failCnt;
 
+    for(failCnt = 0; failCnt < 5; failCnt++){
+        OK = senHubI2cWrite(SHT21_I2C_ADDRESS, &SHT21_RESET, 1); //soft reset
+
+        if(OK){ //if the reset command was sent successfully
+            break; //go to next step
+        }
+        else
+        {
+            vTaskDelay(pdMS_TO_TICKS(1)); //wait a little and then try again
+        }
+    }
+
+    if(OK){ //if the reset command was sent successfully
+        vTaskDelay(pdMS_TO_TICKS(16)); //wait for start up after reset (per datasheet maximum 15 ms)
+
+        uint8_t userReg;
+        for(failCnt = 0; failCnt < 5; failCnt++){
+            size_t userRegReadCnt = senHubI2cReadReg(SHT21_I2C_ADDRESS, SHT21_USER_REG_ADDRESS_READ, &userReg, 1); //read the user reg
+
+            OK = (1 == userRegReadCnt); //was the read successful?
+
+            if(OK){ //if the user reg was read
+                break; //go to next step
+            }
+            else
+            {
+                vTaskDelay(pdMS_TO_TICKS(1)); //wait a little and then try again
+            }
+        }
+
+        if(OK){ //the user reg was read successfully
+            userReg = userReg & ~(SHT21_RESOLUTION_M | SHT21_HEATER_M); //delete fields to be modified
+
+            //sets the resolution to be 14 bit for temperature measurement
+            //12 bit for relative humidity measurement
+            //and turns the heater off
+            userReg = userReg | (SHT21_RESOLUTION_T14_RH12 | SHT21_HEATER_OFF);
+
+            for(failCnt = 0; failCnt < 5; failCnt++){
+                OK = senHubI2cWriteReg(SHT21_I2C_ADDRESS, SHT21_USER_REG_ADDRESS_WRITE, userReg); //write the user register with the new setup
+
+                if(OK){ //if the write was successful
+                    break; //go to next step
+                }
+                else
+                {
+                    vTaskDelay(pdMS_TO_TICKS(1)); //wait a little and then try again
+                }
+            }
+
+            if(OK){ //if the sensor was successfully set up
+                initError = false;
+            }
+            else{ //if the sensor couldn't be set up with the new user register value
+                initError = true;
+            }
+        }
+        else{ //the user reg couldn't be read
+            initError = true;
+        }
+    }
+    else{ //the sensor couldn't be reset
+        initError = true;
+    }
+
+    xEventGroupSetBits(flags, sensorIsInitialized); //signal that the initialization is complete
+
+    vTaskSuspend(xTaskGetCurrentTaskHandle()); //suspend task for ever
 }
 
-static void initCallback(void* pvData, uint_fast8_t status) //it is called from the I2C ISR
+bool sht21GetData(float* temperature_C, float* relHum_percentage)
 {
-    // See if an error occurred.
-    if(status != I2CM_STATUS_SUCCESS){ //if an error occurred
-        initSensor(NULL); //retry
-    }
-    else{ //if there weren't any errors
-        //sets measurement resolution 12 bits for relative humidity and 14 bits for temperature
-        SHT21ReadModifyWrite(&sensor,
-                             SHT21_CMD_WRITE_CONFIG,
-                             ~((uint8_t)(SHT21_CONFIG_RES_M)),
-                             SHT21_CONFIG_RES_12,
-                             &setUpCallback,
-                             NULL);
-    }
-}
+    //wait for the sensor to be initialized
+    xEventGroupWaitBits(flags,
+                        sensorIsInitialized,
+                        pdFALSE, //don't clear the flags
+                        pdTRUE, //all the flags are required (to be set)
+                        portMAX_DELAY); //block indefinitely
 
+    bool measOK;
 
-static void setUpCallback(void* pvData, uint_fast8_t status) //it is called from the I2C ISR
-{
-    // See if an error occurred.
-    if(status != I2CM_STATUS_SUCCESS){ //if an error occurred
-        initCallback(NULL, I2CM_STATUS_SUCCESS); //retry, but not the initialization
-    }
-    else{ //if there weren't any errors
-        BaseType_t higherPriorityTaskWoken;
-        //set the 'sensor is initialized' flag
-        xEventGroupSetBitsFromISR(flags,
-                                  sensorIsInitialized,
-                                  &higherPriorityTaskWoken);
-        portYIELD_FROM_ISR(higherPriorityTaskWoken); //return to the higher priority (than the currently interrupted) task from the ISR, if one has been woken
-    }
-}
-
-
-static void tempReadyCallback(void* pvData, uint_fast8_t status);
-static void rhReadyCallback(void* pvData, uint_fast8_t status);
-
-static void tempReadyCallback(void* pvData, uint_fast8_t status)
-{
-
-    // See if an error occurred.
-    if(status != I2CM_STATUS_SUCCESS){ //if an error occurred
-        //retry
-        SHT21Write(&sensor,
-                   SHT21_CMD_MEAS_T_HOLD,
-                   sensor.pui8Data,
-                   0u,
-                   &tempReadyCallback,
-                   NULL);
-    }
-    else{ //if there weren't any errors
-        BaseType_t higherPriorityTaskWoken;
-        //set the flag
-        xSemaphoreGiveFromISR(conversionStarted,
-                              &higherPriorityTaskWoken);
-        portYIELD_FROM_ISR(higherPriorityTaskWoken); //return to the higher priority (than the currently interrupted) task from the ISR, if one has been woken
-    }
-}
-
-static void rhReadyCallback(void* pvData, uint_fast8_t status)
-{
-
-    // See if an error occurred.
-    if(status != I2CM_STATUS_SUCCESS){ //if an error occurred
-        //retry
-        SHT21Write(&sensor,
-                   SHT21_CMD_MEAS_RH_HOLD,
-                   sensor.pui8Data,
-                   0u,
-                   &rhReadyCallback,
-                   NULL);
-    }
-    else{ //if there weren't any errors
-        BaseType_t higherPriorityTaskWoken;
-        //set the flag
-        xSemaphoreGiveFromISR(conversionStarted,
-                              &higherPriorityTaskWoken);
-        portYIELD_FROM_ISR(higherPriorityTaskWoken); //return to the higher priority (than the currently interrupted) task from the ISR, if one has been woken
-    }
-}
-
-
-
-static void dataReadyCallback(void* pvData, uint_fast8_t status);
-
-static void dataReadyCallback(void* pvData, uint_fast8_t status)
-{
-
-    // See if an error occurred.
-    if(status != I2CM_STATUS_SUCCESS){ //if an error occurred
-        //retry
-        SHT21DataRead(&sensor,
-                      &dataReadyCallback,
-                      NULL);
-    }
-    else{ //if there weren't any errors
-        BaseType_t higherPriorityTaskWoken;
-        //set the flag
-        xSemaphoreGiveFromISR(dataReady,
-                              &higherPriorityTaskWoken);
-        portYIELD_FROM_ISR(higherPriorityTaskWoken); //return to the higher priority (than the currently interrupted) task from the ISR, if one has been woken
-    }
-}
-
-void sht21GetData(float* temperature_C, float* relHum_percentage)
-{
     xSemaphoreTake(sensorMutex, portMAX_DELAY);
     {
-        //wait for the sensor to be initialized
-        xEventGroupWaitBits(flags,
-                            sensorIsInitialized,
-                            pdFALSE, //don't clear the flags
-                            pdTRUE, //all the flags are required (to be set)
-                            portMAX_DELAY); //block indefinitely
+        bool OK;
+        int_fast8_t failCnt;
 
+        //start the conversion (temperature)
+        for(failCnt = 0; failCnt < 5; failCnt++){
+            size_t writeCnt = senHubI2cWrite(SHT21_I2C_ADDRESS, &SHT21_START_TEMPERATURE_MEASUREMENT_HOLD, 1);
 
-        //start temperature conversion
-        SHT21Write(&sensor,
-                   SHT21_CMD_MEAS_T_HOLD,
-                   sensor.pui8Data,
-                   0u,
-                   &tempReadyCallback,
-                   NULL);
+            OK = (1 == writeCnt); //was the measurement successfully started?
 
-        xSemaphoreTake(conversionStarted, portMAX_DELAY); //wait for the I2C operation to complete
+            if(OK){ //if the measurement was successfully started
+                break; //go to next step
+            }
+            else { //if there was an I2C error
+                vTaskDelay(pdMS_TO_TICKS(1)); //wait a little and then try again
+            }
+        }
 
-        SHT21DataRead(&sensor,
-                      &dataReadyCallback,
-                      NULL);
+        if(OK){ //if the temperature measurement was started successfully
+            vTaskDelay(pdMS_TO_TICKS(66)); //wait for the conversion to finish (typically needs 66 ms to complete in 14 bit mode, per datasheet)
 
-        xSemaphoreTake(dataReady, portMAX_DELAY); //wait for the I2C operation to complete
+            uint8_t rawTempBytes[2]; //{MSB, LSB}
+            for(failCnt = 0; failCnt < 5; failCnt++){
+                const size_t rawTempCnt = 2;
+                size_t readCnt = senHubI2cRead(SHT21_I2C_ADDRESS, rawTempBytes, rawTempCnt); //read the temperature data, if in 'hold' mode; will block until the data is available
 
-        SHT21DataTemperatureGetFloat(&sensor, temperature_C); //save the measured temperature to the output variable
+                OK = (rawTempCnt == readCnt); //was the measurement successful?
 
+                if(OK){ //if the data was read successfully
+                    break; //go to next step
+                }
+                else { //if there was an I2C error
+                    vTaskDelay(pdMS_TO_TICKS(1)); //wait a little and then try again
+                }
+            }
 
-        //start humidity conversion
-        SHT21Write(&sensor,
-                   SHT21_CMD_MEAS_RH_HOLD,
-                   sensor.pui8Data,
-                   0u,
-                   &rhReadyCallback,
-                   NULL);
+            if(OK){ //the raw temperature data was read successfully
+                uint16_t rawTemp = (((uint16_t)rawTempBytes[0]) << 8) | ((uint16_t)(rawTempBytes[1] & ~((uint16_t)0x03))); //concatenate the bytes and delete the status bits
 
-        xSemaphoreTake(conversionStarted, portMAX_DELAY); //wait for the I2C operation to complete
+                *temperature_C = -46.85f + ((175.72f / 65536) * rawTemp); //calculate the temperature and save the value to the output variable
 
-        SHT21DataRead(&sensor,
-                      &dataReadyCallback,
-                      NULL);
+                //start the conversion (humidity)
+                for(failCnt = 0; failCnt < 5; failCnt++){
+                    size_t writeCnt = senHubI2cWrite(SHT21_I2C_ADDRESS, &SHT21_START_HUMIDITY_MEASUREMENT_HOLD, 1);
 
-        xSemaphoreTake(dataReady, portMAX_DELAY); //wait for the I2C operation to complete
+                    OK = (1 == writeCnt); //was the measurement successfully started?
 
-        SHT21DataHumidityGetFloat(&sensor, relHum_percentage); //save the measured humidity to the output variable
+                    if(OK){ //if the measurement was successfully started
+                        break; //go to next step
+                    }
+                    else { //if there was an I2C error
+                        vTaskDelay(pdMS_TO_TICKS(1)); //wait a little and then try again
+                    }
+                }
+
+                if(OK){ //if the humidity measurement was started successfully
+                    vTaskDelay(pdMS_TO_TICKS(22)); //wait for the conversion to finish (typically needs 22 ms to complete in 12 bit mode, per datasheet)
+
+                    uint8_t rawHumBytes[2]; //{MSB, LSB}
+                    for(failCnt = 0; failCnt < 5; failCnt++){
+                        const size_t rawHumCnt = 2;
+                        size_t readCnt = senHubI2cRead(SHT21_I2C_ADDRESS, rawHumBytes, rawHumCnt); //read the humidity data, if in 'hold' mode; will block until the data is available
+
+                        OK = (rawHumCnt == readCnt); //was the measurement successful?
+
+                        if(OK){ //if the data was read successfully
+                            break; //go to next step
+                        }
+                        else { //if there was an I2C error
+                            vTaskDelay(pdMS_TO_TICKS(1)); //wait a little and then try again
+                        }
+                    }
+
+                    if(OK){ //the raw humidity data was read successfully
+                        uint16_t rawHum = (((uint16_t)rawHumBytes[0]) << 8) | ((uint16_t)(rawHumBytes[1] & ~((uint16_t)0x03))); //concatenate the bytes and delete the status bits
+
+                        *relHum_percentage = -6.0f + ((125.0f / 65536) * rawHum); //calculate the humidity and save the value to the output variable
+
+                        measOK = true;
+                    }
+                    else{ //the humidity data couldn't be read
+                        measOK = false;
+                    }
+                }
+                else{ //if the humidity couldn't be measured
+                    measOK = false;
+                }
+            }
+            else{ //the temperature data couldn't be read
+                measOK = false;
+            }
+        }
+        else{ //if the temperature couldn't be measured
+            measOK = false;
+        }
     }
     xSemaphoreGive(sensorMutex);
+
+    return measOK;
 }

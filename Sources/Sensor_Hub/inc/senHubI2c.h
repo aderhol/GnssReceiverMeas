@@ -4,7 +4,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 
-size_t senHubI2cWrite(uint8_t slaveAddress, uint8_t values[], size_t length); //transmits all the values, returns the number of values successfully transmitted
+size_t senHubI2cWrite(uint8_t slaveAddress, const uint8_t values[], size_t length); //transmits all the values, returns the number of values successfully transmitted
 bool senHubI2cWriteReg(uint8_t slaveAddress, uint8_t regAddress, uint8_t value); //writes a register
 
 size_t senHubI2cRead(uint8_t slaveAddress, uint8_t data[], size_t length); //reads the specified number of bytes, returns the number of values read
