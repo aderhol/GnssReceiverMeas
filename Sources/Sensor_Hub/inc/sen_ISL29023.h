@@ -1,10 +1,11 @@
-#ifdef szarrago
 #ifndef SOURCES_SENSOR_HUB_INC_SEN_ISL29023_H_
 #define SOURCES_SENSOR_HUB_INC_SEN_ISL29023_H_
 
-void isl29023Init(tI2CMInstance* sensorI2C);
+#include <stdbool.h>
+#include <stdint.h>
 
-void isl29023GetData(float* als, float* ir); //gets the Ambient Light Sense (visible light) and the Infrared light value in lux
+void isl29023Init(void);
+
+bool isl29023GetData(float* als, uint16_t* ir); //gets the Ambient Light Sense (visible light) and the Infrared light value in lux
 
 #endif /* SOURCES_SENSOR_HUB_INC_SEN_ISL29023_H_ */
-#endif

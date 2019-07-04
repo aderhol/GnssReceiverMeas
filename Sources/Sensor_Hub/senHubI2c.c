@@ -390,7 +390,7 @@ bool senHubI2cReadModifyWriteReg(uint8_t slaveAddress, uint8_t regAddress, uint8
             if(OK){ //if the register address was sent successfully
                 I2CMasterSlaveAddrSet(I2C7_BASE, slaveAddress, true); //sets the slave address (modifies it to read)
 
-                I2CMasterControl(I2C7_BASE, I2C_MASTER_CMD_BURST_RECEIVE_START); //initiates the read
+                I2CMasterControl(I2C7_BASE, I2C_MASTER_CMD_SINGLE_RECEIVE); //initiates the read (allowing for repeated start doesn't work, silicon error?)
 
                 xSemaphoreTake(ready, portMAX_DELAY); //wait for the operation to finish
 
@@ -404,7 +404,7 @@ bool senHubI2cReadModifyWriteReg(uint8_t slaveAddress, uint8_t regAddress, uint8
                     I2CMasterSlaveAddrSet(I2C7_BASE, slaveAddress, false); //sets the slave address (modifies it to write)
 
                     I2CMasterDataPut(I2C7_BASE, regAddress); //sends the registers address
-                    I2CMasterControl(I2C7_BASE, I2C_MASTER_CMD_BURST_SEND_START); //initiates the write
+                    I2CMasterControl(I2C7_BASE, I2C_MASTER_CMD_BURST_SEND_START); //initiates the write (repeated start doesn't work, silicon error?)
 
                     xSemaphoreTake(ready, portMAX_DELAY); //wait for the operation to finish
 

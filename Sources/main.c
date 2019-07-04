@@ -48,11 +48,14 @@ static void tester_task(void* pvParameters)
 {
     while(true){
         float temp, pressure;
-        bool OK = bmp180GetData(&temp, &pressure);
+        bool bmp180_OK = bmp180GetData(&temp, &pressure);
+
+        float als;
+        uint16_t ir;
+        bool isl29023_OK = isl29023GetData(&als, &ir);
 
         char str[100];
-        sprintf(str, "OK: %d\t\ttemperature: %.1f\tpressure: %.0f", OK, temp, pressure);
-        //sprintf(str, "reset: %d    start: %d    start2: %d    calibCnt: %d    rawTempCnt: %d    rawPressureCnt: %d    temp: %.2f    pressure: %d", reset, start, start2, calibCnt, rawTempCnt, rawPressureCnt, temp, pressure);
+        sprintf(str, "OK: %d\t\ttemperature: %.1f °C\tpressure: %.0f Pa\t\t\t\tOK: %d\t\tals: %.2f lx\tir: %d", bmp180_OK, temp, pressure, isl29023_OK, als, ir);
         uartPrintLn(usb, str);
 
         vTaskDelay(pdMS_TO_TICKS(500));

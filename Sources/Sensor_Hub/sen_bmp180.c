@@ -6,6 +6,7 @@
 #include <FreeRTOS.h>
 #include <FreeRTOSConfig.h>
 #include <event_groups.h>
+#include <semphr.h>
 
 //driver includes
 
