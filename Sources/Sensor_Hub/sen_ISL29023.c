@@ -46,7 +46,7 @@ static const EventBits_t sensorIsInitialized = ((EventBits_t) 1) << 0;
 
 static volatile SemaphoreHandle_t sensorMutex;
 
-static void init_task(void* pvParameters);
+static void init_task_isl29023(void* pvParameters);
 
 static volatile bool initError; //true if initialization was unsuccessful
 
@@ -55,9 +55,9 @@ static bool measAls(float* als); //measures the ALS
 void isl29023Init(void)
 {
     TaskHandle_t initTaskHandle;
-    xTaskCreate(&init_task,
+    xTaskCreate(&init_task_isl29023,
                 "ISL29023_initTask",
-                configMINIMAL_STACK_SIZE,
+                512,
                 NULL,
                 (configMAX_PRIORITIES - 1),
                 &initTaskHandle);
@@ -68,7 +68,7 @@ void isl29023Init(void)
     sensorMutex = xSemaphoreCreateMutex();
 }
 
-static void init_task(void* pvParameters)
+static void init_task_isl29023(void* pvParameters)
 {
     bool OK;
 

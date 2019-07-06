@@ -35,7 +35,7 @@ static const uint8_t oss = 3; //0, 1, 2, or 3 //over sampling setup
 
 static volatile EventGroupHandle_t flags; //<0>: sensor is initialized, <1>: data is ready
 static const EventBits_t sensorIsInitialized = ((EventBits_t) 1) << 0;
-static void init_task(void* pvParameters);
+static void init_task_bmp180(void* pvParameters);
 
 static volatile SemaphoreHandle_t sensorMutex;
 
@@ -50,9 +50,9 @@ static volatile int16_t MB, MC, MD; //MB isn't used, it is a calibration data th
 void bmp180Init(void)
 {
     TaskHandle_t initTaskHandle;
-    xTaskCreate(&init_task,
+    xTaskCreate(&init_task_bmp180,
                 "bmp180_initTask",
-                configMINIMAL_STACK_SIZE,
+                512,
                 NULL,
                 (configMAX_PRIORITIES - 1),
                 &initTaskHandle);
@@ -64,7 +64,7 @@ void bmp180Init(void)
 }
 
 
-static void init_task(void* pvParameters)
+static void init_task_bmp180(void* pvParameters)
 {
     bool OK;
 

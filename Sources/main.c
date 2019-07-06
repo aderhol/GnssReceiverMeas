@@ -25,19 +25,11 @@ static void tester_task(void* pvParameters);
 
 int main(void)
 {
-    char strRef_ln[] = "$GPGGA,171321.000,4732.8213,N,01906.8596,E,1,15,0.71,118.7,M,41.1,M,,*64\r\n";
-    char strRef[] = "$GPGGA,171321.000,4732.8213,N,01906.8596,E,1,15,0.71,118.7,M,41.1,M,,*64";
-    char str[200] = "GPGGA,171321.000,4732.8213,N,01906.8596,E,1,15,0.71,118.7,M,41.1,M,,*";
-
-    addChecksum(str, 199, false, true, true);
-
-    bool OK = (strcmp(str, strRef_ln) == 0);
-
     init();
 
     xTaskCreate(&tester_task,
                 "tester",
-                1024,
+                3072,
                 NULL,
                 1,
                 &testerTaskHandle);

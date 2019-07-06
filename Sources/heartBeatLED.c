@@ -43,7 +43,7 @@ void heartBeatLedInit(void)
     
     xTaskCreate(&heartBeatLed_task,
                 "heartBeatLedTask",
-                configMINIMAL_STACK_SIZE,
+                256,
                 NULL, //parameter to task
                 TASK_PRIORITY, //priority
                 &heartBeatLedTaskHandle);   

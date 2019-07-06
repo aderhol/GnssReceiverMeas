@@ -79,9 +79,9 @@ static void uart0Init(uint32_t baud)
     IntPrioritySet(INT_UART0, INTERRUPT_PRIORITY << (8 - configPRIO_BITS)); //sets the interrupt priority (interrupt priority needs to be shifted to the upper 3 bits)
 
     //Tx task creation
-    xTaskCreate(uart0Tx_task,
+    xTaskCreate(&uart0Tx_task,
                 "uart0TxTask",
-                configMINIMAL_STACK_SIZE,
+                256,
                 NULL, //parameter to task
                 TX_PRIORITY, //priority
                 &(uart0.task)); //task handle

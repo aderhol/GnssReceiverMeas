@@ -33,7 +33,7 @@ void sensorHubInit(void)
     TaskHandle_t feedbackLedTaskHandle_;
     xTaskCreate(&feedbackLED_task,
                 "sensor feedback LED task",
-                configMINIMAL_STACK_SIZE,
+                256,
                 NULL,
                 1,
                 &feedbackLedTaskHandle_);

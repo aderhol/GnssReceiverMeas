@@ -42,16 +42,16 @@ static const EventBits_t sensorIsInitialized = ((EventBits_t) 1) << 0;
 
 static volatile SemaphoreHandle_t sensorMutex;
 
-static void init_task(void* pvParameters);
+static void init_task_sht21(void* pvParameters);
 
 static volatile bool initError; //true if initialization was unsuccessful
 
 void sht21Init()
 {
     TaskHandle_t initTaskHandle;
-    xTaskCreate(&init_task,
+    xTaskCreate(&init_task_sht21,
                 "SHT21_initTask",
-                configMINIMAL_STACK_SIZE,
+                512,
                 NULL,
                 (configMAX_PRIORITIES - 1),
                 &initTaskHandle);
@@ -62,7 +62,7 @@ void sht21Init()
     sensorMutex = xSemaphoreCreateMutex();
 }
 
-static void init_task(void* pvParameters)
+static void init_task_sht21(void* pvParameters)
 {
     vTaskDelay(pdMS_TO_TICKS(16)); //wait for the sensor to start up after power on
 
