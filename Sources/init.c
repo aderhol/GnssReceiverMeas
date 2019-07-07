@@ -3,6 +3,7 @@
 #include <stdint.h>
 
 //FreeRTOS includes
+#include <FreeRTOS.h>
 
 
 //driver includes
@@ -16,16 +17,16 @@
 
 
 static const uint32_t CLOCK_FRQ_HZ = 120E6;
-volatile uint32_t SystemCoreClock; //actual system core clock frequency in Hz (required by FreeRTOS)
+uint32_t SystemCoreClock; //actual system core clock frequency in Hz (required by FreeRTOS)
 
 
 extern void interruptInit(void);
 extern void heartBeatLedInit(void);
 extern void uartInit(void);
-extern void sensorHubInit(void);
+extern void sensorHubInit(TickType_t maxDelay_ticks);
 
 
-void init(void)
+void init(TickType_t maxDelay_ticks)
 {
     //sets the system core clock frequency to CLOCK_FRQ_HZ, returns the actual frequency set
     SystemCoreClock = SysCtlClockFreqSet(((uint32_t)SYSCTL_XTAL_25MHZ |
@@ -42,5 +43,5 @@ void init(void)
 
     uartInit(); //initializes the UART peripherals
 
-    sensorHubInit(); //initializes the sensor hub
+    sensorHubInit(maxDelay_ticks); //initializes the sensor hub
 }

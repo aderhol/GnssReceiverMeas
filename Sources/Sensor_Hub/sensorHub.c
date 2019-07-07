@@ -28,7 +28,7 @@ static void feedbackLED_task(void* pvParameters);
 
 volatile TaskHandle_t feedbackLedTaskHandle;
 
-void sensorHubInit(void)
+void sensorHubInit(TickType_t maxDelay_ticks)
 {
     TaskHandle_t feedbackLedTaskHandle_;
     xTaskCreate(&feedbackLED_task,
@@ -50,19 +50,19 @@ void sensorHubInit(void)
 
     senHubI2cInit(); //I2C for the sensors
 
-    bmp180Init(); //temperature and pressure
-    isl29023Init(); //visible and IR light intensity
-    sht21Init(); //relative humidity and temperature
+    bmp180Init(maxDelay_ticks); //temperature and pressure
+    isl29023Init(maxDelay_ticks); //visible and IR light intensity
+    sht21Init(maxDelay_ticks); //relative humidity and temperature
 }
 
-bool sampleSensors(SensorData* sensorData)
+bool sampleSensors(TickType_t maxDelay_ticks, SensorData* sensorData)
 {
     bool OK;
 
     if(
-            bmp180GetData(&(sensorData->temperature_C_bmp180), &(sensorData->pressure_Pa)) &&
-            isl29023GetData(&(sensorData->visibleLightIntensity_lx), &(sensorData->infraredLighIntensity)) &&
-            sht21GetData(&(sensorData->temperature_C_sht21), &(sensorData->relativeHumidity_percentage))
+            bmp180GetData(maxDelay_ticks, &(sensorData->temperature_C_bmp180), &(sensorData->pressure_Pa)) &&
+            isl29023GetData(maxDelay_ticks, &(sensorData->visibleLightIntensity_lx), &(sensorData->infraredLighIntensity)) &&
+            sht21GetData(maxDelay_ticks, &(sensorData->temperature_C_sht21), &(sensorData->relativeHumidity_percentage))
             ){
         OK = true;
     }

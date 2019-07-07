@@ -50,15 +50,18 @@ static void init_task_isl29023(void* pvParameters);
 
 static volatile bool initError; //true if initialization was unsuccessful
 
-static bool measAls(float* als); //measures the ALS
+static bool measAls(TickType_t maxDelay_ticks, float* als); //measures the ALS
 
-void isl29023Init(void)
+void isl29023Init(TickType_t maxDelay_ticks)
 {
+    static TickType_t maxDelay_ticks_st;
+    maxDelay_ticks_st = maxDelay_ticks;
+
     TaskHandle_t initTaskHandle;
     xTaskCreate(&init_task_isl29023,
                 "ISL29023_initTask",
                 512,
-                NULL,
+                &maxDelay_ticks_st,
                 (configMAX_PRIORITIES - 1),
                 &initTaskHandle);
 
@@ -70,13 +73,16 @@ void isl29023Init(void)
 
 static void init_task_isl29023(void* pvParameters)
 {
+    const TickType_t maxDelay_ticks = *((TickType_t*)pvParameters);
+
     bool OK;
 
     int_fast8_t failCnt;
 
     for(failCnt = 0; failCnt < 5; failCnt++){
         //set 1K range and 16 bit resolution
-        OK = senHubI2cReadModifyWriteReg(ISL29023_I2C_ADDRESS, ISL29023_CMD_II_REG_ADDRESS,
+        OK = senHubI2cReadModifyWriteReg(maxDelay_ticks,
+                                         ISL29023_I2C_ADDRESS, ISL29023_CMD_II_REG_ADDRESS,
                                          ISL29023_RANGE_M | ISL29023_RES_M
                                          , ISL29023_RANGE_1K | ISL29023_RES_16BIT
                                          );
@@ -109,7 +115,7 @@ typedef enum{
     r64K = 3
 }AlsRange;
 
-static bool measAls(float* als)
+static bool measAls(TickType_t maxDelay_ticks, float* als)
 {
     static AlsRange alsRange = r1K; //the current range setting of the sensor (0: 1K, 1: 4K, 2: 16K, 3: 64K), initially 1K
 
@@ -121,7 +127,8 @@ static bool measAls(float* als)
 
         for(failCnt = 0; failCnt < 5; failCnt++){
             //start the conversion (ALS)
-            OK = senHubI2cReadModifyWriteReg(ISL29023_I2C_ADDRESS, ISL29023_CMD_I_REG_ADDRESS,
+            OK = senHubI2cReadModifyWriteReg(maxDelay_ticks,
+                                             ISL29023_I2C_ADDRESS, ISL29023_CMD_I_REG_ADDRESS,
                                              ISL29023_MODE_M,
                                              ISL29023_MODE_ALS_ONCE
                                              );
@@ -142,7 +149,7 @@ static bool measAls(float* als)
             //read data (ALS)
             for(failCnt = 0; failCnt < 5; failCnt++){
                 const size_t dataRegByteCnt = 2;
-                size_t dataRegCnt = senHubI2cReadReg(ISL29023_I2C_ADDRESS, ISL29023_DATA_REG_START_ADDRESS, dataReg, dataRegByteCnt); //read the data registers
+                size_t dataRegCnt = senHubI2cReadReg(maxDelay_ticks, ISL29023_I2C_ADDRESS, ISL29023_DATA_REG_START_ADDRESS, dataReg, dataRegByteCnt); //read the data registers
 
                 OK = (dataRegByteCnt == dataRegCnt); //was the I2C read operation successful?
 
@@ -160,7 +167,8 @@ static bool measAls(float* als)
                 if((raw > (uint16_t)(UINT16_MAX * .95f)) && (alsRange < r64K)){ //if the value is closer to the high limit of the current range than 5 FS AND it is not in the highest range mode already
                     for(failCnt = 0; failCnt < 5; failCnt++){
                         //increase the range by one
-                        OK = senHubI2cReadModifyWriteReg(ISL29023_I2C_ADDRESS, ISL29023_CMD_II_REG_ADDRESS,
+                        OK = senHubI2cReadModifyWriteReg(maxDelay_ticks,
+                                                         ISL29023_I2C_ADDRESS, ISL29023_CMD_II_REG_ADDRESS,
                                                          ISL29023_RANGE_M,
                                                          ((uint8_t)(alsRange + 1))
                                                          );
@@ -186,7 +194,8 @@ static bool measAls(float* als)
                 else if((raw < (uint16_t)(UINT16_MAX * .05f)) && (alsRange > r1K)){ //if the value is closer to the low limit of the current range than 5 FS AND it is not in the lowest range mode already
                     for(failCnt = 0; failCnt < 5; failCnt++){
                         //decrease the range by one
-                        OK = senHubI2cReadModifyWriteReg(ISL29023_I2C_ADDRESS, ISL29023_CMD_II_REG_ADDRESS,
+                        OK = senHubI2cReadModifyWriteReg(maxDelay_ticks,
+                                                         ISL29023_I2C_ADDRESS, ISL29023_CMD_II_REG_ADDRESS,
                                                          ISL29023_RANGE_M,
                                                          ((uint8_t)(alsRange - 1))
                                                          );
@@ -256,7 +265,7 @@ static bool measAls(float* als)
     return measOK;
 }
 
-bool isl29023GetData(float* als_lx, uint16_t* ir)
+bool isl29023GetData(TickType_t maxDelay_ticks, float* als_lx, uint16_t* ir)
 {
     bool measOK;
 
@@ -274,14 +283,15 @@ bool isl29023GetData(float* als_lx, uint16_t* ir)
 
         xSemaphoreTake(sensorMutex, portMAX_DELAY); //take the mutex protecting the sensor
         {
-            OK = measAls(als_lx); //measure ALS
+            OK = measAls(maxDelay_ticks, als_lx); //measure ALS
 
             if(OK){ //if the ALS was measured successfully
                 //measure IR
 
                 for(failCnt = 0; failCnt < 5; failCnt++){
                     //start the conversion (IR)
-                    OK = senHubI2cReadModifyWriteReg(ISL29023_I2C_ADDRESS, ISL29023_CMD_I_REG_ADDRESS,
+                    OK = senHubI2cReadModifyWriteReg(maxDelay_ticks,
+                                                     ISL29023_I2C_ADDRESS, ISL29023_CMD_I_REG_ADDRESS,
                                                      ISL29023_MODE_M,
                                                      ISL29023_MODE_IR_ONCE
                                                      );
@@ -302,7 +312,7 @@ bool isl29023GetData(float* als_lx, uint16_t* ir)
                     //read data (IR)
                     for(failCnt = 0; failCnt < 5; failCnt++){
                         const size_t dataRegByteCnt = 2;
-                        size_t dataRegCnt = senHubI2cReadReg(ISL29023_I2C_ADDRESS, ISL29023_DATA_REG_START_ADDRESS, dataReg, dataRegByteCnt); //read the data registers
+                        size_t dataRegCnt = senHubI2cReadReg(maxDelay_ticks, ISL29023_I2C_ADDRESS, ISL29023_DATA_REG_START_ADDRESS, dataReg, dataRegByteCnt); //read the data registers
 
                         OK = (dataRegByteCnt == dataRegCnt); //was the I2C read operation successful?
 

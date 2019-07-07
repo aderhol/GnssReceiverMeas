@@ -46,13 +46,16 @@ static void init_task_sht21(void* pvParameters);
 
 static volatile bool initError; //true if initialization was unsuccessful
 
-void sht21Init()
+void sht21Init(TickType_t maxDelay_ticks)
 {
+    static TickType_t maxDelay_ticks_st;
+    maxDelay_ticks_st = maxDelay_ticks;
+
     TaskHandle_t initTaskHandle;
     xTaskCreate(&init_task_sht21,
                 "SHT21_initTask",
                 512,
-                NULL,
+                &maxDelay_ticks_st,
                 (configMAX_PRIORITIES - 1),
                 &initTaskHandle);
 
@@ -64,13 +67,15 @@ void sht21Init()
 
 static void init_task_sht21(void* pvParameters)
 {
+    const TickType_t maxDelay_ticks = *((TickType_t*)pvParameters);
+
     vTaskDelay(pdMS_TO_TICKS(16)); //wait for the sensor to start up after power on
 
     bool OK;
     int_fast8_t failCnt;
 
     for(failCnt = 0; failCnt < 5; failCnt++){
-        OK = senHubI2cWrite(SHT21_I2C_ADDRESS, &SHT21_RESET, 1); //soft reset
+        OK = senHubI2cWrite(maxDelay_ticks, SHT21_I2C_ADDRESS, &SHT21_RESET, 1); //soft reset
 
         if(OK){ //if the reset command was sent successfully
             break; //go to next step
@@ -86,7 +91,7 @@ static void init_task_sht21(void* pvParameters)
 
         uint8_t userReg;
         for(failCnt = 0; failCnt < 5; failCnt++){
-            size_t userRegReadCnt = senHubI2cReadReg(SHT21_I2C_ADDRESS, SHT21_USER_REG_ADDRESS_READ, &userReg, 1); //read the user reg
+            size_t userRegReadCnt = senHubI2cReadReg(maxDelay_ticks, SHT21_I2C_ADDRESS, SHT21_USER_REG_ADDRESS_READ, &userReg, 1); //read the user reg
 
             OK = (1 == userRegReadCnt); //was the read successful?
 
@@ -108,7 +113,7 @@ static void init_task_sht21(void* pvParameters)
             userReg = userReg | (SHT21_RESOLUTION_T14_RH12 | SHT21_HEATER_OFF);
 
             for(failCnt = 0; failCnt < 5; failCnt++){
-                OK = senHubI2cWriteReg(SHT21_I2C_ADDRESS, SHT21_USER_REG_ADDRESS_WRITE, userReg); //write the user register with the new setup
+                OK = senHubI2cWriteReg(maxDelay_ticks, SHT21_I2C_ADDRESS, SHT21_USER_REG_ADDRESS_WRITE, userReg); //write the user register with the new setup
 
                 if(OK){ //if the write was successful
                     break; //go to next step
@@ -139,7 +144,7 @@ static void init_task_sht21(void* pvParameters)
     vTaskSuspend(xTaskGetCurrentTaskHandle()); //suspend task for ever
 }
 
-bool sht21GetData(float* temperature_C, float* relHum_percentage)
+bool sht21GetData(TickType_t maxDelay_ticks, float* temperature_C, float* relHum_percentage)
 {
     //wait for the sensor to be initialized
     xEventGroupWaitBits(flags,
@@ -157,7 +162,7 @@ bool sht21GetData(float* temperature_C, float* relHum_percentage)
 
         //start the conversion (temperature)
         for(failCnt = 0; failCnt < 5; failCnt++){
-            size_t writeCnt = senHubI2cWrite(SHT21_I2C_ADDRESS, &SHT21_START_TEMPERATURE_MEASUREMENT_HOLD, 1);
+            size_t writeCnt = senHubI2cWrite(maxDelay_ticks, SHT21_I2C_ADDRESS, &SHT21_START_TEMPERATURE_MEASUREMENT_HOLD, 1);
 
             OK = (1 == writeCnt); //was the measurement successfully started?
 
@@ -175,7 +180,7 @@ bool sht21GetData(float* temperature_C, float* relHum_percentage)
             uint8_t rawTempBytes[2]; //{MSB, LSB}
             for(failCnt = 0; failCnt < 5; failCnt++){
                 const size_t rawTempCnt = 2;
-                size_t readCnt = senHubI2cRead(SHT21_I2C_ADDRESS, rawTempBytes, rawTempCnt); //read the temperature data, if in 'hold' mode; will block until the data is available
+                size_t readCnt = senHubI2cRead(maxDelay_ticks, SHT21_I2C_ADDRESS, rawTempBytes, rawTempCnt); //read the temperature data, if in 'hold' mode; will block until the data is available
 
                 OK = (rawTempCnt == readCnt); //was the measurement successful?
 
@@ -194,7 +199,7 @@ bool sht21GetData(float* temperature_C, float* relHum_percentage)
 
                 //start the conversion (humidity)
                 for(failCnt = 0; failCnt < 5; failCnt++){
-                    size_t writeCnt = senHubI2cWrite(SHT21_I2C_ADDRESS, &SHT21_START_HUMIDITY_MEASUREMENT_HOLD, 1);
+                    size_t writeCnt = senHubI2cWrite(maxDelay_ticks, SHT21_I2C_ADDRESS, &SHT21_START_HUMIDITY_MEASUREMENT_HOLD, 1);
 
                     OK = (1 == writeCnt); //was the measurement successfully started?
 
@@ -212,7 +217,7 @@ bool sht21GetData(float* temperature_C, float* relHum_percentage)
                     uint8_t rawHumBytes[2]; //{MSB, LSB}
                     for(failCnt = 0; failCnt < 5; failCnt++){
                         const size_t rawHumCnt = 2;
-                        size_t readCnt = senHubI2cRead(SHT21_I2C_ADDRESS, rawHumBytes, rawHumCnt); //read the humidity data, if in 'hold' mode; will block until the data is available
+                        size_t readCnt = senHubI2cRead(maxDelay_ticks, SHT21_I2C_ADDRESS, rawHumBytes, rawHumCnt); //read the humidity data, if in 'hold' mode; will block until the data is available
 
                         OK = (rawHumCnt == readCnt); //was the measurement successful?
 

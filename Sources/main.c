@@ -25,7 +25,7 @@ static void tester_task(void* pvParameters);
 
 int main(void)
 {
-    init();
+    init(pdMS_TO_TICKS(100));
 
     xTaskCreate(&tester_task,
                 "tester",
@@ -48,7 +48,7 @@ static void tester_task(void* pvParameters)
 
         SensorData sensorData;
 
-        bool OK = sampleSensors(&sensorData);
+        bool OK = sampleSensors(pdMS_TO_TICKS(150), &sensorData);
 
         char str[500];
         sprintf(str, "OK: %d\t\t\t\ttemperature_bmp180: %.2f °C\tpressure: %.2f Pa\t\t\t\tvisible light intensity: %.2f lx\tinfrared light intensity: %d\t\t\t\ttemperature_sh21: %.2f °C\trelative humidity: %.2f%%",

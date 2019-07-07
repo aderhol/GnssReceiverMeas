@@ -90,7 +90,7 @@ void I2C7_ISR(void)
     portYIELD_FROM_ISR(higherPriorityTaskWoken); //return to the higher priority (than the currently interrupted) task from the ISR, if one has been woken
 }
 
-size_t senHubI2cWrite(uint8_t slaveAddress, const uint8_t values[], size_t length)
+size_t senHubI2cWrite(TickType_t maxDelay_ticks, uint8_t slaveAddress, const uint8_t values[], size_t length)
 {
 #ifdef DEBUG
     while(0 == length){
@@ -99,27 +99,26 @@ size_t senHubI2cWrite(uint8_t slaveAddress, const uint8_t values[], size_t lengt
 
     size_t cnt = 0;
 
-    xSemaphoreTake(mutex, portMAX_DELAY);
-    {
+    bool OK;
+
+    if(xSemaphoreTake(mutex, maxDelay_ticks) == pdTRUE){
         I2CMasterSlaveAddrSet(I2C7_BASE, slaveAddress, false); //sets the slave address
 
         if(length == 1){ //single send
             I2CMasterDataPut(I2C7_BASE, values[0]); //sets the value of the byte to be written
             I2CMasterControl(I2C7_BASE, I2C_MASTER_CMD_SINGLE_SEND); //initiate the write
 
-            xSemaphoreTake(ready, portMAX_DELAY); //wait for the operation to finish
+            OK = (pdTRUE == xSemaphoreTake(ready, maxDelay_ticks)); //wait for the operation to finish
 
-            cnt = (I2CMasterErr(I2C7_BASE) == I2C_MASTER_ERR_NONE) ? 1 : 0; //cnt remains 0 if there was an error
+            cnt = (OK && (I2CMasterErr(I2C7_BASE) == I2C_MASTER_ERR_NONE)) ? 1 : 0; //cnt remains 0 if there was an error
         }
         else{ //burst
-            bool OK;
-
             I2CMasterDataPut(I2C7_BASE, values[0]); //sets the value of the byte to be written to the first value
             I2CMasterControl(I2C7_BASE, I2C_MASTER_CMD_BURST_SEND_START); //initiate the write
 
-            xSemaphoreTake(ready, portMAX_DELAY); //wait for the operation to finish
+            OK = (pdTRUE == xSemaphoreTake(ready, maxDelay_ticks)); //wait for the operation to finish
 
-            OK = (I2CMasterErr(I2C7_BASE) == I2C_MASTER_ERR_NONE);
+            OK = (OK && (I2CMasterErr(I2C7_BASE) == I2C_MASTER_ERR_NONE));
 
             if(OK){
                 cnt++;//one more byte is sent
@@ -129,14 +128,14 @@ size_t senHubI2cWrite(uint8_t slaveAddress, const uint8_t values[], size_t lengt
                     I2CMasterDataPut(I2C7_BASE, values[i]); //sets the value of the byte to be written
                     I2CMasterControl(I2C7_BASE, I2C_MASTER_CMD_BURST_SEND_CONT); //send next byte
 
-                    xSemaphoreTake(ready, portMAX_DELAY); //wait for the operation to finish
+                    OK = (pdTRUE == xSemaphoreTake(ready, maxDelay_ticks)); //wait for the operation to finish
 
-                    OK = (I2CMasterErr(I2C7_BASE) == I2C_MASTER_ERR_NONE); //check for errors
+                    OK = (OK && (I2CMasterErr(I2C7_BASE) == I2C_MASTER_ERR_NONE)); //check for errors
 
                     if(!OK & !isIdle()){ //there was an error, and the controller isn't already idle
                         I2CMasterControl(I2C7_BASE, I2C_MASTER_CMD_BURST_SEND_ERROR_STOP); //send error stop
 
-                        xSemaphoreTake(ready, portMAX_DELAY); //wait for the operation to finish
+                        xSemaphoreTake(ready, maxDelay_ticks); //wait for the operation to finish
 
                         break;
                     }
@@ -149,9 +148,9 @@ size_t senHubI2cWrite(uint8_t slaveAddress, const uint8_t values[], size_t lengt
                     I2CMasterDataPut(I2C7_BASE, values[length - 1]); //sets the value of the byte to be written to the last value
                     I2CMasterControl(I2C7_BASE, I2C_MASTER_CMD_BURST_SEND_FINISH); //send next byte
 
-                    xSemaphoreTake(ready, portMAX_DELAY); //wait for the operation to finish
+                    OK = (pdTRUE == xSemaphoreTake(ready, maxDelay_ticks)); //wait for the operation to finish
 
-                    OK = (I2CMasterErr(I2C7_BASE) == I2C_MASTER_ERR_NONE); //check for errors
+                    OK = (OK && (I2CMasterErr(I2C7_BASE) == I2C_MASTER_ERR_NONE)); //check for errors
 
                     if(OK){
                         cnt++; //the last byte was sent
@@ -161,21 +160,21 @@ size_t senHubI2cWrite(uint8_t slaveAddress, const uint8_t values[], size_t lengt
             else if(!isIdle()){ //if the controller is not already idle
                 I2CMasterControl(I2C7_BASE, I2C_MASTER_CMD_BURST_SEND_ERROR_STOP); //send error stop
 
-                xSemaphoreTake(ready, portMAX_DELAY); //wait for the operation to finish
+                xSemaphoreTake(ready, maxDelay_ticks); //wait for the operation to finish
             }
         }
+        xSemaphoreGive(mutex);
     }
-    xSemaphoreGive(mutex);
 
     return cnt;
 }
 
-bool senHubI2cWriteReg(uint8_t slaveAddress, uint8_t regAddress, uint8_t value) //writes a register
+bool senHubI2cWriteReg(TickType_t maxDelay_ticks, uint8_t slaveAddress, uint8_t regAddress, uint8_t value) //writes a register
 {
     uint8_t values[2] = {regAddress, value};
 
     size_t cnt;
-    cnt = senHubI2cWrite(slaveAddress, values, 2);
+    cnt = senHubI2cWrite(maxDelay_ticks, slaveAddress, values, 2);
 
     bool isOK;
     if(2 == cnt){
@@ -188,7 +187,7 @@ bool senHubI2cWriteReg(uint8_t slaveAddress, uint8_t regAddress, uint8_t value) 
     return isOK;
 }
 
-size_t senHubI2cRead(uint8_t slaveAddress, uint8_t data[], size_t length)
+size_t senHubI2cRead(TickType_t maxDelay_ticks, uint8_t slaveAddress, uint8_t data[], size_t length)
 {
 #ifdef DEBUG
     while(0 == length){
@@ -196,8 +195,7 @@ size_t senHubI2cRead(uint8_t slaveAddress, uint8_t data[], size_t length)
 #endif
     size_t cnt = 0;
 
-    xSemaphoreTake(mutex, portMAX_DELAY);
-    {
+    if(pdTRUE == xSemaphoreTake(mutex, maxDelay_ticks)){
         I2CMasterSlaveAddrSet(I2C7_BASE, slaveAddress, true); //sets the slave address
 
         bool OK;
@@ -205,9 +203,9 @@ size_t senHubI2cRead(uint8_t slaveAddress, uint8_t data[], size_t length)
         if(1 == length){ //single byte read
             I2CMasterControl(I2C7_BASE, I2C_MASTER_CMD_SINGLE_RECEIVE); //initiates the read
 
-            xSemaphoreTake(ready, portMAX_DELAY); //wait for the operation to finish
+            OK = (pdTRUE == xSemaphoreTake(ready, maxDelay_ticks)); //wait for the operation to finish
 
-            OK = (I2CMasterErr(I2C7_BASE) == I2C_MASTER_ERR_NONE); //checks if the transaction was successful
+            OK = (OK && (I2CMasterErr(I2C7_BASE) == I2C_MASTER_ERR_NONE)); //checks if the transaction was successful
 
             if(OK){ //if the byte was successfully received
                 data[0] = I2CMasterDataGet(I2C7_BASE); //save the data to the output variable
@@ -218,9 +216,9 @@ size_t senHubI2cRead(uint8_t slaveAddress, uint8_t data[], size_t length)
         else{ //burst read
             I2CMasterControl(I2C7_BASE, I2C_MASTER_CMD_BURST_RECEIVE_START); //initiates the read
 
-            xSemaphoreTake(ready, portMAX_DELAY); //wait for the operation to finish
+            OK = (pdTRUE == xSemaphoreTake(ready, maxDelay_ticks)); //wait for the operation to finish
 
-            OK = (I2CMasterErr(I2C7_BASE) == I2C_MASTER_ERR_NONE); //checks if the transaction was successful
+            OK = (OK && (I2CMasterErr(I2C7_BASE) == I2C_MASTER_ERR_NONE)); //checks if the transaction was successful
 
             if(OK){ //if the first byte was successfully received
                 data[0] = I2CMasterDataGet(I2C7_BASE); //save the data to the output variable
@@ -231,9 +229,9 @@ size_t senHubI2cRead(uint8_t slaveAddress, uint8_t data[], size_t length)
                 for(i = 1; i < (length - 1); i++){
                     I2CMasterControl(I2C7_BASE, I2C_MASTER_CMD_BURST_RECEIVE_CONT); //continues the read
 
-                    xSemaphoreTake(ready, portMAX_DELAY); //wait for the operation to finish
+                    OK = (pdTRUE == xSemaphoreTake(ready, maxDelay_ticks)); //wait for the operation to finish
 
-                    OK = (I2CMasterErr(I2C7_BASE) == I2C_MASTER_ERR_NONE); //checks if the transaction was successful
+                    OK = (OK && (I2CMasterErr(I2C7_BASE) == I2C_MASTER_ERR_NONE)); //checks if the transaction was successful
 
                     if(OK){ //if the byte was read successfully
                         data[i] = I2CMasterDataGet(I2C7_BASE); //save the data to the output variable
@@ -242,7 +240,7 @@ size_t senHubI2cRead(uint8_t slaveAddress, uint8_t data[], size_t length)
                     else if(!isIdle()){ //if there was an error and the controller isn't yet idles
                         I2CMasterControl(I2C7_BASE, I2C_MASTER_CMD_BURST_RECEIVE_ERROR_STOP); //send error stop
 
-                        xSemaphoreTake(ready, portMAX_DELAY); //wait for the operation to finish
+                        xSemaphoreTake(ready, maxDelay_ticks); //wait for the operation to finish
 
                         break;
                     }
@@ -251,9 +249,9 @@ size_t senHubI2cRead(uint8_t slaveAddress, uint8_t data[], size_t length)
                 if(OK){ //if the loop completed without an error
                     I2CMasterControl(I2C7_BASE, I2C_MASTER_CMD_BURST_RECEIVE_FINISH); //finish the read
 
-                    xSemaphoreTake(ready, portMAX_DELAY); //wait for the operation to finish
+                    OK = (pdTRUE == xSemaphoreTake(ready, maxDelay_ticks)); //wait for the operation to finish
 
-                    OK = (I2CMasterErr(I2C7_BASE) == I2C_MASTER_ERR_NONE); //checks if the transaction was successful
+                    OK = (OK && (I2CMasterErr(I2C7_BASE) == I2C_MASTER_ERR_NONE)); //checks if the transaction was successful
 
                     if(OK){ //if the last data was received successfully
                         data[length - 1] = I2CMasterDataGet(I2C7_BASE); //save the data to the output variable
@@ -264,21 +262,20 @@ size_t senHubI2cRead(uint8_t slaveAddress, uint8_t data[], size_t length)
             else if(!isIdle()){ //if the first byte wasn't received and the controller is not already idle
                 I2CMasterControl(I2C7_BASE, I2C_MASTER_CMD_BURST_RECEIVE_ERROR_STOP); //send error stop
 
-                xSemaphoreTake(ready, portMAX_DELAY); //wait for the operation to finish
+                xSemaphoreTake(ready, maxDelay_ticks); //wait for the operation to finish
             }
         }
+        xSemaphoreGive(mutex);
     }
-    xSemaphoreGive(mutex);
 
     return cnt;
 }
 
-size_t senHubI2cReadReg(uint8_t slaveAddress, uint8_t regAddress, uint8_t data[], size_t length)
+size_t senHubI2cReadReg(TickType_t maxDelay_ticks, uint8_t slaveAddress, uint8_t regAddress, uint8_t data[], size_t length)
 {
     size_t cnt = 0;
 
-    xSemaphoreTake(mutex, portMAX_DELAY);
-    {
+    if(pdTRUE == xSemaphoreTake(mutex, maxDelay_ticks)){
         I2CMasterSlaveAddrSet(I2C7_BASE, slaveAddress, false); //sets the slave address
 
         bool OK;
@@ -286,9 +283,9 @@ size_t senHubI2cReadReg(uint8_t slaveAddress, uint8_t regAddress, uint8_t data[]
         I2CMasterDataPut(I2C7_BASE, regAddress); //sends the registers address
         I2CMasterControl(I2C7_BASE, I2C_MASTER_CMD_BURST_SEND_START); //initiates the write
 
-        xSemaphoreTake(ready, portMAX_DELAY); //wait for the operation to finish
+        OK = (pdTRUE == xSemaphoreTake(ready, maxDelay_ticks)); //wait for the operation to finish
 
-        OK = (I2CMasterErr(I2C7_BASE) == I2C_MASTER_ERR_NONE); //checks if the transaction was successful
+        OK = (OK && (I2CMasterErr(I2C7_BASE) == I2C_MASTER_ERR_NONE)); //checks if the transaction was successful
 
         if(OK){ //if the register address was sent successfully
             I2CMasterSlaveAddrSet(I2C7_BASE, slaveAddress, true); //sets the slave address (modifies it to read)
@@ -296,9 +293,9 @@ size_t senHubI2cReadReg(uint8_t slaveAddress, uint8_t regAddress, uint8_t data[]
             if(1 == length){ //single byte read
                 I2CMasterControl(I2C7_BASE, I2C_MASTER_CMD_SINGLE_RECEIVE); //initiates the read
 
-                xSemaphoreTake(ready, portMAX_DELAY); //wait for the operation to finish
+                OK == (pdTRUE == xSemaphoreTake(ready, maxDelay_ticks)); //wait for the operation to finish
 
-                OK = (I2CMasterErr(I2C7_BASE) == I2C_MASTER_ERR_NONE); //checks if the transaction was successful
+                OK = (OK && (I2CMasterErr(I2C7_BASE) == I2C_MASTER_ERR_NONE)); //checks if the transaction was successful
 
                 if(OK){ //if the byte was successfully received
                     data[0] = I2CMasterDataGet(I2C7_BASE); //save the data to the output variable
@@ -309,9 +306,9 @@ size_t senHubI2cReadReg(uint8_t slaveAddress, uint8_t regAddress, uint8_t data[]
             else{ //burst read
                 I2CMasterControl(I2C7_BASE, I2C_MASTER_CMD_BURST_RECEIVE_START); //initiates the read
 
-                xSemaphoreTake(ready, portMAX_DELAY); //wait for the operation to finish
+                OK = (pdTRUE == xSemaphoreTake(ready, maxDelay_ticks)); //wait for the operation to finish
 
-                OK = (I2CMasterErr(I2C7_BASE) == I2C_MASTER_ERR_NONE); //checks if the transaction was successful
+                OK = (OK && (I2CMasterErr(I2C7_BASE) == I2C_MASTER_ERR_NONE)); //checks if the transaction was successful
 
                 if(OK){ //if the byte was successfully received
                     data[0] = I2CMasterDataGet(I2C7_BASE); //save the data to the output variable
@@ -322,9 +319,9 @@ size_t senHubI2cReadReg(uint8_t slaveAddress, uint8_t regAddress, uint8_t data[]
                     for(i = 1; i < (length - 1); i++){
                         I2CMasterControl(I2C7_BASE, I2C_MASTER_CMD_BURST_RECEIVE_CONT); //continues the read
 
-                        xSemaphoreTake(ready, portMAX_DELAY); //wait for the operation to finish
+                        OK = (pdTRUE == xSemaphoreTake(ready, maxDelay_ticks)); //wait for the operation to finish
 
-                        OK = (I2CMasterErr(I2C7_BASE) == I2C_MASTER_ERR_NONE); //checks if the transaction was successful
+                        OK = (OK && (I2CMasterErr(I2C7_BASE) == I2C_MASTER_ERR_NONE)); //checks if the transaction was successful
 
                         if(OK){ //if the byte was read successfully
                             data[i] = I2CMasterDataGet(I2C7_BASE); //save the data to the output variable
@@ -333,7 +330,7 @@ size_t senHubI2cReadReg(uint8_t slaveAddress, uint8_t regAddress, uint8_t data[]
                         else if(!isIdle()){ //if the controller is not yet idle
                             I2CMasterControl(I2C7_BASE, I2C_MASTER_CMD_BURST_RECEIVE_ERROR_STOP); //send error stop
 
-                            xSemaphoreTake(ready, portMAX_DELAY); //wait for the operation to finish
+                            xSemaphoreTake(ready, maxDelay_ticks); //wait for the operation to finish
 
                             break;
                         }
@@ -342,9 +339,9 @@ size_t senHubI2cReadReg(uint8_t slaveAddress, uint8_t regAddress, uint8_t data[]
                     if(OK){ //if the loop completed without an error
                         I2CMasterControl(I2C7_BASE, I2C_MASTER_CMD_BURST_RECEIVE_FINISH); //read the lst byte
 
-                        xSemaphoreTake(ready, portMAX_DELAY); //wait for the operation to finish
+                        OK = (pdTRUE == xSemaphoreTake(ready, maxDelay_ticks)); //wait for the operation to finish
 
-                        OK = (I2CMasterErr(I2C7_BASE) == I2C_MASTER_ERR_NONE); //checks if the transaction was successful
+                        OK = (OK && (I2CMasterErr(I2C7_BASE) == I2C_MASTER_ERR_NONE)); //checks if the transaction was successful
 
                         if(OK){ //if the last data was received successfully
                             data[length - 1] = I2CMasterDataGet(I2C7_BASE); //save the data to the output variable
@@ -355,27 +352,26 @@ size_t senHubI2cReadReg(uint8_t slaveAddress, uint8_t regAddress, uint8_t data[]
                 else if(!isIdle()){ //if the first byte wasn't received and  the controller isn't yet idle
                     I2CMasterControl(I2C7_BASE, I2C_MASTER_CMD_BURST_RECEIVE_ERROR_STOP); //send error stop
 
-                    xSemaphoreTake(ready, portMAX_DELAY); //wait for the operation to finish
+                    xSemaphoreTake(ready, maxDelay_ticks); //wait for the operation to finish
                 }
             }
         }
         else if(!isIdle()){ //sending the register address was unsuccessful and the controller isn't yet idle
             I2CMasterControl(I2C7_BASE, I2C_MASTER_CMD_BURST_SEND_ERROR_STOP); //send error stop
 
-            xSemaphoreTake(ready, portMAX_DELAY); //wait for the operation to finish
+            xSemaphoreTake(ready, maxDelay_ticks); //wait for the operation to finish
         }
+        xSemaphoreGive(mutex);
     }
-    xSemaphoreGive(mutex);
 
     return cnt;
 }
 
-bool senHubI2cReadModifyWriteReg(uint8_t slaveAddress, uint8_t regAddress, uint8_t mask, uint8_t value)
+bool senHubI2cReadModifyWriteReg(TickType_t maxDelay_ticks, uint8_t slaveAddress, uint8_t regAddress, uint8_t mask, uint8_t value)
 {
     bool isOK = false;
 
-    xSemaphoreTake(mutex, portMAX_DELAY);
-        {
+    if(pdTRUE == xSemaphoreTake(mutex, maxDelay_ticks)){
             I2CMasterSlaveAddrSet(I2C7_BASE, slaveAddress, false); //sets the slave address
 
             bool OK;
@@ -383,18 +379,18 @@ bool senHubI2cReadModifyWriteReg(uint8_t slaveAddress, uint8_t regAddress, uint8
             I2CMasterDataPut(I2C7_BASE, regAddress); //sends the registers address
             I2CMasterControl(I2C7_BASE, I2C_MASTER_CMD_BURST_SEND_START); //initiates the write
 
-            xSemaphoreTake(ready, portMAX_DELAY); //wait for the operation to finish
+            OK = (pdTRUE == xSemaphoreTake(ready, maxDelay_ticks)); //wait for the operation to finish
 
-            OK = (I2CMasterErr(I2C7_BASE) == I2C_MASTER_ERR_NONE); //checks if the transaction was successful
+            OK = (OK && (I2CMasterErr(I2C7_BASE) == I2C_MASTER_ERR_NONE)); //checks if the transaction was successful
 
             if(OK){ //if the register address was sent successfully
                 I2CMasterSlaveAddrSet(I2C7_BASE, slaveAddress, true); //sets the slave address (modifies it to read)
 
                 I2CMasterControl(I2C7_BASE, I2C_MASTER_CMD_SINGLE_RECEIVE); //initiates the read (allowing for repeated start doesn't work, silicon error?)
 
-                xSemaphoreTake(ready, portMAX_DELAY); //wait for the operation to finish
+                OK = (pdTRUE == xSemaphoreTake(ready, maxDelay_ticks)); //wait for the operation to finish
 
-                OK = (I2CMasterErr(I2C7_BASE) == I2C_MASTER_ERR_NONE); //checks if the transaction was successful
+                OK = (OK && (I2CMasterErr(I2C7_BASE) == I2C_MASTER_ERR_NONE)); //checks if the transaction was successful
 
                 if(OK){ //if the byte was successfully received
                     uint8_t reg = I2CMasterDataGet(I2C7_BASE); //gets the registers value
@@ -406,17 +402,17 @@ bool senHubI2cReadModifyWriteReg(uint8_t slaveAddress, uint8_t regAddress, uint8
                     I2CMasterDataPut(I2C7_BASE, regAddress); //sends the registers address
                     I2CMasterControl(I2C7_BASE, I2C_MASTER_CMD_BURST_SEND_START); //initiates the write (repeated start doesn't work, silicon error?)
 
-                    xSemaphoreTake(ready, portMAX_DELAY); //wait for the operation to finish
+                    OK == (pdTRUE == xSemaphoreTake(ready, maxDelay_ticks)); //wait for the operation to finish
 
-                    OK = (I2CMasterErr(I2C7_BASE) == I2C_MASTER_ERR_NONE); //checks if the transaction was successful
+                    OK = (OK && (I2CMasterErr(I2C7_BASE) == I2C_MASTER_ERR_NONE)); //checks if the transaction was successful
 
                     if(OK){ //if the regAddress was sent successfully
                         I2CMasterDataPut(I2C7_BASE, reg); //sends the registers value
                         I2CMasterControl(I2C7_BASE, I2C_MASTER_CMD_BURST_SEND_FINISH); //initiates the write
 
-                        xSemaphoreTake(ready, portMAX_DELAY); //wait for the operation to finish
+                        OK = (pdTRUE == xSemaphoreTake(ready, maxDelay_ticks)); //wait for the operation to finish
 
-                        OK = (I2CMasterErr(I2C7_BASE) == I2C_MASTER_ERR_NONE); //checks if the transaction was successful
+                        OK = (OK && (I2CMasterErr(I2C7_BASE) == I2C_MASTER_ERR_NONE)); //checks if the transaction was successful
 
                         if(OK){ //the register was successfully written
                             isOK = true;
@@ -425,22 +421,22 @@ bool senHubI2cReadModifyWriteReg(uint8_t slaveAddress, uint8_t regAddress, uint8
                     else if(!isIdle()){ //if the regAddress wasn't sent and the controller is not yet idle
                         I2CMasterControl(I2C7_BASE, I2C_MASTER_CMD_BURST_SEND_ERROR_STOP); //send error stop
 
-                        xSemaphoreTake(ready, portMAX_DELAY); //wait for the operation to finish
+                        xSemaphoreTake(ready, maxDelay_ticks); //wait for the operation to finish
                     }
                 }
                 else if(!isIdle()){ //if the first byte wasn't received and the controller is not yet idle
                     I2CMasterControl(I2C7_BASE, I2C_MASTER_CMD_BURST_RECEIVE_ERROR_STOP); //send error stop
 
-                    xSemaphoreTake(ready, portMAX_DELAY); //wait for the operation to finish
+                    xSemaphoreTake(ready, maxDelay_ticks); //wait for the operation to finish
                 }
             }
             else if(!isIdle()){ //sending the register address was unsuccessful and the controller is not yet idle
                 I2CMasterControl(I2C7_BASE, I2C_MASTER_CMD_BURST_SEND_ERROR_STOP); //send error stop
 
-                xSemaphoreTake(ready, portMAX_DELAY); //wait for the operation to finish
+                xSemaphoreTake(ready, maxDelay_ticks); //wait for the operation to finish
             }
+            xSemaphoreGive(mutex);
         }
-        xSemaphoreGive(mutex);
 
         return isOK;
 }

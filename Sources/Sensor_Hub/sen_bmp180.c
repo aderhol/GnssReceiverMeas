@@ -47,13 +47,16 @@ static volatile uint16_t AC4, AC5, AC6;
 static volatile int16_t B1, B2;
 static volatile int16_t MB, MC, MD; //MB isn't used, it is a calibration data though, idk...,  the datasheet sucks
 
-void bmp180Init(void)
+void bmp180Init(TickType_t maxDelay_ticks)
 {
+    static TickType_t maxDelay_ticks_st;
+    maxDelay_ticks_st = maxDelay_ticks;
+
     TaskHandle_t initTaskHandle;
     xTaskCreate(&init_task_bmp180,
                 "bmp180_initTask",
                 512,
-                NULL,
+                &maxDelay_ticks_st,
                 (configMAX_PRIORITIES - 1),
                 &initTaskHandle);
 
@@ -66,12 +69,14 @@ void bmp180Init(void)
 
 static void init_task_bmp180(void* pvParameters)
 {
+    const TickType_t maxDelay_ticks = *((TickType_t*)pvParameters);
+
     bool OK;
 
     int_fast8_t failCnt;
 
     for(failCnt = 0; failCnt < 5; failCnt++){
-        OK = senHubI2cWriteReg(BMP180_I2C_ADDRESS, BMP180_RESET_REG_ADDRESS, BMP180_RESET_COMMAND); //soft reset
+        OK = senHubI2cWriteReg(maxDelay_ticks, BMP180_I2C_ADDRESS, BMP180_RESET_REG_ADDRESS, BMP180_RESET_COMMAND); //soft reset
 
         if(OK){ //if reset command was sent successfully
             break; //go to next step
@@ -88,7 +93,7 @@ static void init_task_bmp180(void* pvParameters)
         uint8_t rawCalib[22]; //raw calibration data
         for(failCnt = 0; failCnt < 5; failCnt++){
             const size_t numOfcalibBytes = 22;
-            size_t calibCnt = senHubI2cReadReg(BMP180_I2C_ADDRESS, BMP180_CALIBDAT_REG_START_ADDRESS, rawCalib, numOfcalibBytes); //read the bytes
+            size_t calibCnt = senHubI2cReadReg(maxDelay_ticks, BMP180_I2C_ADDRESS, BMP180_CALIBDAT_REG_START_ADDRESS, rawCalib, numOfcalibBytes); //read the bytes
             OK = (numOfcalibBytes == calibCnt); //all 22 byte was read successfully?
 
             if(OK){ //if all the calibration data was read
@@ -130,7 +135,7 @@ static void init_task_bmp180(void* pvParameters)
 }
 
 
-bool bmp180GetData(float* temperature_C, float* pressure_Pa)
+bool bmp180GetData(TickType_t maxDelay_ticks, float* temperature_C, float* pressure_Pa)
 {
     bool measOK;
 
@@ -149,7 +154,7 @@ bool bmp180GetData(float* temperature_C, float* pressure_Pa)
         xSemaphoreTake(sensorMutex, portMAX_DELAY); //take the mutex protecting the sensor
         {
             for(failCnt = 0; failCnt < 5; failCnt++){
-                OK = senHubI2cWriteReg(BMP180_I2C_ADDRESS, BMP180_CONTROL_REG_ADDRESS, BMP180_CONTROL_START_TEMP_COMMAND); //start temperature measurement
+                OK = senHubI2cWriteReg(maxDelay_ticks, BMP180_I2C_ADDRESS, BMP180_CONTROL_REG_ADDRESS, BMP180_CONTROL_START_TEMP_COMMAND); //start temperature measurement
 
                 if(OK){ //if the measurement was started successfully
                     break; //go to next step
@@ -167,7 +172,7 @@ bool bmp180GetData(float* temperature_C, float* pressure_Pa)
                 //wait for the conversion to be ready
                 for(failCnt = 0; failCnt < 5; failCnt++){
                     uint8_t cntrRegSco_temp;
-                    OK = (1 == senHubI2cReadReg(BMP180_I2C_ADDRESS, BMP180_CONTROL_REG_ADDRESS, &cntrRegSco_temp, 1)); //get the SCO bit (0 if the conversion has finished)
+                    OK = (1 == senHubI2cReadReg(maxDelay_ticks, BMP180_I2C_ADDRESS, BMP180_CONTROL_REG_ADDRESS, &cntrRegSco_temp, 1)); //get the SCO bit (0 if the conversion has finished)
 
                     OK = OK && (0 ==(cntrRegSco_temp & BMP180_CONTROL_SCO_BIT)); //if the I2C operation was successful AND the SCO bit is 0
 
@@ -183,7 +188,7 @@ bool bmp180GetData(float* temperature_C, float* pressure_Pa)
                     uint8_t rawTemp[2];
                     for(failCnt = 0; failCnt < 5; failCnt++){
                         const size_t tempDatByteCnt = 2;
-                        size_t rawTempCnt = senHubI2cReadReg(BMP180_I2C_ADDRESS, BMP180_DAT_REG_START_ADDRESS, rawTemp, tempDatByteCnt); //get raw temperature measurement
+                        size_t rawTempCnt = senHubI2cReadReg(maxDelay_ticks, BMP180_I2C_ADDRESS, BMP180_DAT_REG_START_ADDRESS, rawTemp, tempDatByteCnt); //get raw temperature measurement
                         OK = (tempDatByteCnt == rawTempCnt);
 
                         if(OK){ //if all the temperature data was read
@@ -201,7 +206,7 @@ bool bmp180GetData(float* temperature_C, float* pressure_Pa)
                                 | ((uint32_t)rawTemp[1]));
 
                         for(failCnt = 0; failCnt < 5; failCnt++){
-                            OK = senHubI2cWriteReg(BMP180_I2C_ADDRESS, BMP180_CONTROL_REG_ADDRESS, BMP180_CONTROL_START_PRESSURE_COMMAND); //start pressure measurement
+                            OK = senHubI2cWriteReg(maxDelay_ticks, BMP180_I2C_ADDRESS, BMP180_CONTROL_REG_ADDRESS, BMP180_CONTROL_START_PRESSURE_COMMAND); //start pressure measurement
 
                             if(OK){ //if the measurement was started successfully
                                 break; //go to next step
@@ -243,7 +248,7 @@ bool bmp180GetData(float* temperature_C, float* pressure_Pa)
                             //wait for the conversion to be ready
                             for(failCnt = 0; failCnt < 5; failCnt++){
                                 uint8_t cntrRegSco_pressure;
-                                OK = (1 == senHubI2cReadReg(BMP180_I2C_ADDRESS, BMP180_CONTROL_REG_ADDRESS, &cntrRegSco_pressure, 1)); //get the SCO bit (0 if the conversion has finished)
+                                OK = (1 == senHubI2cReadReg(maxDelay_ticks, BMP180_I2C_ADDRESS, BMP180_CONTROL_REG_ADDRESS, &cntrRegSco_pressure, 1)); //get the SCO bit (0 if the conversion has finished)
 
                                 OK = OK && (0 ==(cntrRegSco_pressure & BMP180_CONTROL_SCO_BIT)); //if the I2C operation was successful AND the SCO bit is 0
 
@@ -259,7 +264,7 @@ bool bmp180GetData(float* temperature_C, float* pressure_Pa)
                                 uint8_t rawPressure[3];
                                 for(failCnt = 0; failCnt < 5; failCnt++){
                                     const size_t pressureDatByteCnt = 3;
-                                    size_t rawPressureCnt = senHubI2cReadReg(BMP180_I2C_ADDRESS, BMP180_DAT_REG_START_ADDRESS, rawPressure, pressureDatByteCnt); //get raw pressure data
+                                    size_t rawPressureCnt = senHubI2cReadReg(maxDelay_ticks, BMP180_I2C_ADDRESS, BMP180_DAT_REG_START_ADDRESS, rawPressure, pressureDatByteCnt); //get raw pressure data
 
                                     OK = (pressureDatByteCnt == rawPressureCnt);
 
