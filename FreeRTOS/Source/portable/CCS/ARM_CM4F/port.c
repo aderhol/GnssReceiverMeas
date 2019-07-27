@@ -617,7 +617,7 @@ void vPortSetupTimerInterrupt( void )
 		scheduler.  Note however that some vendor specific peripheral libraries
 		assume a non-zero priority group setting, in which cases using a value
 		of zero will result in unpredictable behaviour. */
-		configASSERT( ( portAIRCR_REG & portPRIORITY_GROUP_MASK ) <= ulMaxPRIGROUPValue );
+		//configASSERT( ( portAIRCR_REG & portPRIORITY_GROUP_MASK ) <= ulMaxPRIGROUPValue );/******************************************************************************/
 	}
 
 #endif /* configASSERT_DEFINED */

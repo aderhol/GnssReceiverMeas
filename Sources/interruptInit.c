@@ -16,5 +16,5 @@
 
 void interruptInit(void)
 {
-    IntPriorityGroupingSet(8); //sets all interrupt bits for preemptable priority bits
+    IntPriorityGroupingSet(2); //sets bits 7 & 6 to preemptable priority bits and bit 5 to sub priority bit
 }
