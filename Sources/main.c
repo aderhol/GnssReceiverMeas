@@ -27,12 +27,12 @@ int main(void)
 {
     init(pdMS_TO_TICKS(100));
 
-    xTaskCreate(&tester_task,
+    /*xTaskCreate(&tester_task,
                 "tester",
                 3072,
                 NULL,
                 1,
-                &testerTaskHandle);
+                &testerTaskHandle);*/
 
     uartPrintLn(usb, "Started!");
 

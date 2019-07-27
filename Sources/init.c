@@ -24,6 +24,7 @@ extern void interruptInit(void);
 extern void heartBeatLedInit(void);
 extern void uartInit(void);
 extern void sensorHubInit(TickType_t maxDelay_ticks);
+extern void skewMeasInit(void);
 
 
 void init(TickType_t maxDelay_ticks)
@@ -44,4 +45,6 @@ void init(TickType_t maxDelay_ticks)
     uartInit(); //initializes the UART peripherals
 
     sensorHubInit(maxDelay_ticks); //initializes the sensor hub
+
+    skewMeasInit(); //initializes the skew measurement
 }
