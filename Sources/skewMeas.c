@@ -45,13 +45,14 @@ static void message_task(void* pvParameters);
 static TaskHandle_t errTaskHandle;
 static void err_task(void* pvParameters);
 
-static TaskHandle_t timeoutTaskHandle;
-static void timeout_task(void* pvParameters);
+static TimerHandle_t timeoutTimerHandle;
+static void timeout_timerService(TimerHandle_t xTimer);
 
 static bool checkRef(int64_t* skew);
 
 static uint32_t getTimerSnapshot(uint32_t base, uint32_t timer);
-static uint32_t getTimerFreerunning(uint32_t base, uint32_t timer);
+
+static float calcTimeDiff_ms(TickType_t A, TickType_t B);
 
 typedef enum{
     available,
@@ -68,7 +69,7 @@ typedef struct{
     int64_t time;
     int64_t skew;
     Status status;
-
+    TickType_t sysTime;
 }Dut;
 
 static volatile Dut dut;
@@ -129,8 +130,14 @@ void ISR_TIMER2_A(void)
             dut.status = missingRef;
         }
 
-        BaseType_t higherPriorityTaskWoken;
+        BaseType_t higherPriorityTaskWoken = pdFALSE;
+
         xEventGroupSetBitsFromISR(flags, ppsReadyFlag, &higherPriorityTaskWoken);
+
+        //stop the timeout timer
+        xTimerStopFromISR(timeoutTimerHandle,
+                           &higherPriorityTaskWoken);
+
         portYIELD_FROM_ISR(higherPriorityTaskWoken);
     }
 }
@@ -143,48 +150,66 @@ void ISR_TIMER2_B(void)
 
     if(dut.status == waiting){
         dut.time = ((int64_t)getTimerSnapshot(TIMER2_BASE, TIMER_B)) + ((int64_t)(overflowCount<<24)); //save the capture time
+        dut.sysTime = xTaskGetTickCountFromISR(); //save the current system time
 
         if(ref.available){ //if a ref PPS is available
             int64_t skew;
             if(checkRef(&skew)){ //if the new ref can be paired to the new dut PPS
                 dut.skew = skew; //update the skew of the dut
                 dut.status = available; //the dut is now available
-
-                ref.available = false; //the ref has been used up / paired
             }
             else{ //if the new dut PPS doesn't belong to the ref on record
                 dut.status = captured;
 
-                BaseType_t higherPriorityTaskWoken;
+                //start the timeout timer
+                BaseType_t higherPriorityTaskWoken = pdFALSE;
+                xTimerStartFromISR(timeoutTimerHandle,
+                                   &higherPriorityTaskWoken);
+
                 //signal to task
                 vTaskNotifyGiveFromISR(errTaskHandle,
                                 &higherPriorityTaskWoken);
+
                 portYIELD_FROM_ISR(higherPriorityTaskWoken); //return to the higher priority (than the currently interrupted) task from the ISR, if one has been woken
                 //error(extraRef);/************************************************************************************************************************************************/
             }
+            ref.available = false; //the ref has been used up: paired or discarded
         }
         else{ //if a ref PPS is not immediately available
             dut.status = captured;
+
+            //start the timeout timer
+            BaseType_t higherPriorityTaskWoken = pdFALSE;
+            xTimerStartFromISR(timeoutTimerHandle,
+                               &higherPriorityTaskWoken);
+            portYIELD_FROM_ISR(higherPriorityTaskWoken);
         }
     }
     else{ //if a new dut PPS came before the previous got handled
         dut.status = glitch; //a glitch occurred
 
-        BaseType_t higherPriorityTaskWoken;
+        BaseType_t higherPriorityTaskWoken = pdFALSE;
         xEventGroupSetBitsFromISR(flags, ppsReadyFlag, &higherPriorityTaskWoken);
+
+        //stop the timeout timer
+        xTimerStopFromISR(timeoutTimerHandle,
+                           &higherPriorityTaskWoken);
+
         portYIELD_FROM_ISR(higherPriorityTaskWoken);
     }
 }
 
-static void timeout_task(void* pvParameters)
+static void timeout_timerService(TimerHandle_t xTimer)
 {
-    while(true){
-        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-
-        vTaskDelay(pdMS_TO_TICKS(D_REF_DUT_MS));
-
-        uartPrintLn(usb,"ttt");
+    taskENTER_CRITICAL();
+    {
+        if(dut.status == captured){
+            dut.status = missingRef;
+        }
     }
+    taskEXIT_CRITICAL();
+
+    xEventGroupSetBits(flags, ppsReadyFlag);
 }
 
 static bool checkRef(int64_t* skew)
@@ -291,12 +316,11 @@ void skewMeasInit(void)
                 2,
                 &errTaskHandle);
 
-    xTaskCreate(&timeout_task,
-                "timeoutTask",
-                512,
-                NULL,
-                4,
-                &timeoutTaskHandle);
+    timeoutTimerHandle = xTimerCreate("timeoutTimer",
+                                      pdMS_TO_TICKS(D_REF_DUT_MS),
+                                      pdFALSE,
+                                      (void*) 0,
+                                      &timeout_timerService);
 }
 
 static void err_task(void* pvParameters)
@@ -313,33 +337,28 @@ void ISR_GPIOK(void)
     GPIOIntClear(GPIO_PORTK_BASE, (uint32_t)(~((uint32_t)0)));
 
 
-    BaseType_t higherPriorityTaskWoken;
-    //signal to task
-    vTaskNotifyGiveFromISR(messageTaskHandle,
-                    &higherPriorityTaskWoken);
+    BaseType_t higherPriorityTaskWoken = pdFALSE;
+    //signal to task, pass it the current System Time
+    xTaskNotifyFromISR(messageTaskHandle,
+                       xTaskGetTickCountFromISR(),
+                       eSetValueWithOverwrite,
+                       &higherPriorityTaskWoken);
     portYIELD_FROM_ISR(higherPriorityTaskWoken); //return to the higher priority (than the currently interrupted) task from the ISR, if one has been woken
 }
 
 static void message_task(void* pvParameters)
 {
     while(true){
-        TickType_t start = xTaskGetTickCount();
-        ulTaskNotifyTake(pdTRUE, portMAX_DELAY); //wait for the start of an NMEA package
-        TickType_t end = xTaskGetTickCount();
-
-        float waitTime = (end - start) * portTICK_PERIOD_MS;
-        char str[100];
-        sprintf(str, "Wait Time: %.2f ms\t\t", waitTime);
-        uartPrint(usb, str);
+        TickType_t invocTime;
+        xTaskNotifyWait(0,
+                        UINT32_MAX,
+                        ((uint32_t*)(&invocTime)),
+                        portMAX_DELAY);
 
         Dut dutPps;
-        int64_t time, overflowCount_I;
-        uint32_t time0;
 
-        IntMasterDisable();
+        taskENTER_CRITICAL();
         {
-            time0 = getTimerFreerunning(TIMER0_BASE, TIMER_A);
-            overflowCount_I = overflowCount;
             dutPps = dut; //copy the dut
 
             if(dut.status != captured){ //if the DUT PPS is not currently waiting to be paired to a ref PPS
@@ -349,23 +368,16 @@ static void message_task(void* pvParameters)
                 xEventGroupClearBits(flags, ppsReadyFlag);//clear the ready flag
             }
         }
-        IntMasterEnable();
-
-        time = ((int64_t)time0) + ((int64_t)(overflowCount_I << 24)); //get the current time
+        taskEXIT_CRITICAL();
 
         if(dutPps.status != waiting){ //if a PPS was captured
-            int64_t d;
-            d = time - dutPps.time; //calculate the delay
+            float d = calcTimeDiff_ms(dutPps.sysTime, invocTime); //calculate the delay
 
             char str[100];
-            sprintf(str, "D: %.2f ms\t\t", ((float)d) * (1.0e3f / ((float)SystemCoreClock)));
+            sprintf(str, "D: %.2f ms\t\t", d);
             uartPrint(usb, str);
 
-            if(d<0){
-                uartPrintLn(usb, "???????");
-            }
-
-            if(d < dPpsMessage_clk){ //if the PPS is in time
+            if(d < D_PPS_MESSAGE_MS){ //if the PPS is in time
                 if(dutPps.status == captured){ //if the PPS was in a captured state
                     //wait for it to get finalized
                     xEventGroupWaitBits(flags,
@@ -374,12 +386,12 @@ static void message_task(void* pvParameters)
                                         pdTRUE, //all the flags are required (to be set)
                                         portMAX_DELAY); //block indefinitely
 
-                    IntMasterDisable();
+                    taskENTER_CRITICAL();
                     {
                         dutPps = dut; //copy the dut
                         dut.status = waiting; //reset the DUT PPS
                     }
-                    IntMasterEnable();
+                    taskEXIT_CRITICAL();
                 }
 
                 switch(dutPps.status){
@@ -423,9 +435,18 @@ static uint32_t getTimerSnapshot(uint32_t base, uint32_t timer)
     return ((uint32_t)((((uint32_t)0xFFu) & psSnapshot) << 16)) | (((uint32_t)0xFFFFu) & timerSnapshot);
 }
 
-static uint32_t getTimerFreerunning(uint32_t base, uint32_t timer)
+static const TickType_t TickType_t_MAX = (((TickType_t)0) - ((TickType_t)1));
+//calculates the time difference (in ms) between 2 invocations of the xTaskGetTickCount/xTaskGetTickCountFromISR functions: A(earlier) -> B(older)
+static float calcTimeDiff_ms(TickType_t A, TickType_t B)
 {
-    uint32_t timerSnapshot = ((timer == TIMER_A) ? HWREG(base + TIMER_O_TAV) : HWREG(base + TIMER_O_TBV));
-    uint32_t psSnapshot = ((timer == TIMER_A) ? HWREG(base + TIMER_O_TAPV) : HWREG(base + TIMER_O_TBPV));
-    return ((uint32_t)((((uint32_t)0xFFu) & psSnapshot) << 16)) | (((uint32_t)0xFFFFu) & timerSnapshot);
+    float diff_ms;
+
+    if(A <= B){ //if there wasn't an overflow
+        diff_ms = (B - A) * portTICK_PERIOD_MS;
+    }
+    else{ //if there was an overflow
+        diff_ms = (B + (TickType_t_MAX - A)) * portTICK_PERIOD_MS;
+    }
+
+    return diff_ms;
 }

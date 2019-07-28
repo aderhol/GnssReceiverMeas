@@ -83,7 +83,7 @@ void I2C7_ISR(void)
     uint32_t callers = I2CMasterIntStatusEx(I2C7_BASE, true);  //determines what triggered the interrupt
     I2CMasterIntClear(I2C7_BASE);  //clears the interrupt flags
 
-    BaseType_t higherPriorityTaskWoken;
+    BaseType_t higherPriorityTaskWoken = pdFALSE;
     //signal to task
     xSemaphoreGiveFromISR(ready,
                           &higherPriorityTaskWoken);
