@@ -61,6 +61,12 @@ extern void vPortSVCHandler(void);
 //UART0
 extern void uart0_ISR(void);
 
+//UART3
+extern void uart3_ISR(void);
+
+//UART6
+extern void uart6_ISR(void);
+
 //Sensor HUB
 extern void I2C7_ISR(void);
 
@@ -68,7 +74,6 @@ extern void I2C7_ISR(void);
 extern void ISR_TIMER0_A(void);
 extern void ISR_TIMER2_A(void);
 extern void ISR_TIMER2_B(void);
-extern void ISR_GPIOK(void);
 
 //*****************************************************************************
 //
@@ -149,14 +154,14 @@ void (* const g_pfnVectors[])(void) =
     IntDefaultHandler,                      // ADC1 Sequence 3
     IntDefaultHandler,                      // External Bus Interface 0
     IntDefaultHandler,                      // GPIO Port J
-    ISR_GPIOK,                      // GPIO Port K
+    IntDefaultHandler,                      // GPIO Port K
     IntDefaultHandler,                      // GPIO Port L
     IntDefaultHandler,                      // SSI2 Rx and Tx
     IntDefaultHandler,                      // SSI3 Rx and Tx
-    IntDefaultHandler,                      // UART3 Rx and Tx
+    uart3_ISR,                      // UART3 Rx and Tx
     IntDefaultHandler,                      // UART4 Rx and Tx
     IntDefaultHandler,                      // UART5 Rx and Tx
-    IntDefaultHandler,                      // UART6 Rx and Tx
+    uart6_ISR,                      // UART6 Rx and Tx
     IntDefaultHandler,                      // UART7 Rx and Tx
     IntDefaultHandler,                      // I2C2 Master and Slave
     IntDefaultHandler,                      // I2C3 Master and Slave

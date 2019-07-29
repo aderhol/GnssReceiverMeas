@@ -35,7 +35,7 @@ bool addChecksum(char str[], size_t maxLength, bool hasStartChar, bool hasEndCha
                 }while(prv != '\0');
             }
 
-            str++; //ignore the staring *
+            str++; //ignore the staring $
 
             if(!hasEndChar){ //if it doesn't have the closing *
                 strncat(str, "*", 1); //append the closing *

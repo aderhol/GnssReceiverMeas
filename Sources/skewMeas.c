@@ -2,6 +2,8 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <stdio.h>
+#include <math.h>
+#include <string.h>
 
 //FreeRTOS includes
 #include <FreeRTOS.h>
@@ -22,6 +24,7 @@
 //user includes
 #include <skewMeas.h>
 #include <uartIO.h>
+#include <nmea.h>
 
 
 
@@ -33,14 +36,10 @@ static const int16_t D_REF_DUT_MS = 500; //the maximum skew in ms between the re
 static const int16_t D_PPS_MESSAGE_MS = 500; //the maximum delay in ms between the dut PPS and the start off the NMEA packet for them to be deemed a pair
 
 static int64_t dRefDut_clk; //the maximum skew in clock ticks under witch the ref and dut can be deemed a pair
-static int64_t dPpsMessage_clk; //the maximum delay in ticks between the dut PPS and the start off the NMEA packet for them to be deemed a pair
 
 void ISR_TIMER0_A(void);
 void ISR_TIMER2_A(void);
 void ISR_TIMER2_B(void);
-
-static TaskHandle_t messageTaskHandle;
-static void message_task(void* pvParameters);
 
 static TaskHandle_t errTaskHandle;
 static void err_task(void* pvParameters);
@@ -80,6 +79,8 @@ static volatile struct{
 }ref;
 
 static volatile int64_t overflowCount;
+
+static void dutARx_callback(char* str);
 
 //overflow
 void ISR_TIMER0_A(void)
@@ -171,7 +172,6 @@ void ISR_TIMER2_B(void)
                                 &higherPriorityTaskWoken);
 
                 portYIELD_FROM_ISR(higherPriorityTaskWoken); //return to the higher priority (than the currently interrupted) task from the ISR, if one has been woken
-                //error(extraRef);/************************************************************************************************************************************************/
             }
             ref.available = false; //the ref has been used up: paired or discarded
         }
@@ -242,19 +242,6 @@ void skewMeasInit(void)
     flags = xEventGroupCreate();
     xEventGroupClearBits(flags, ppsReadyFlag);
 
-    //enable the IO port for the mess interrupt (PK5 pin)
-    if(!SysCtlPeripheralReady(SYSCTL_PERIPH_GPIOK)) {
-        SysCtlPeripheralEnable(SYSCTL_PERIPH_GPIOK);
-        while(!SysCtlPeripheralReady(SYSCTL_PERIPH_GPIOK)){}
-    }
-
-    GPIOPinTypeGPIOInput(GPIO_PORTK_BASE, GPIO_PIN_5);
-    GPIOIntTypeSet(GPIO_PORTK_BASE, GPIO_PIN_5, GPIO_RISING_EDGE);
-    GPIOIntEnable(GPIO_PORTK_BASE, GPIO_PIN_5);
-    IntPrioritySet(INT_GPIOK, 6 << (8 - configPRIO_BITS));
-    IntEnable(INT_GPIOK);
-
-
     //enable the IO port for the input capture legs
     if(!SysCtlPeripheralReady(SYSCTL_PERIPH_GPIOM)) {
         SysCtlPeripheralEnable(SYSCTL_PERIPH_GPIOM);
@@ -302,13 +289,6 @@ void skewMeasInit(void)
     IntPrioritySet(INT_TIMER2B, PPS_INTERRUPT_PRIORITY << (8 - configPRIO_BITS));
 
 
-    xTaskCreate(&message_task,
-                "messageTask",
-                3072,
-                NULL,
-                3,
-                &messageTaskHandle);
-
     xTaskCreate(&err_task,
                 "errTask",
                 512,
@@ -321,6 +301,9 @@ void skewMeasInit(void)
                                       pdFALSE,
                                       (void*) 0,
                                       &timeout_timerService);
+
+    /******    UART    ******/
+    uartSetRxCallback(dutA, &dutARx_callback);
 }
 
 static void err_task(void* pvParameters)
@@ -328,104 +311,388 @@ static void err_task(void* pvParameters)
     while(true){
         ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
 
-        uartPrintLn(usb,"extraRef");
+        uartPrintLn(usb,"$EXTRAREF*0B");
     }
 }
 
-void ISR_GPIOK(void)
+static bool stateMachine(const char* str, const char** pos, const char* pattern, const char** next);
+
+typedef enum{
+    OK,
+    ppsGlitch,
+    ppsOld,
+    ppsMissing,
+    refMissing
+}SkewStatus;
+
+static SkewStatus getSkew(float* D, float* skew_ns);
+static const char* printSkew(void);
+
+static bool safeCat(char* dest, const char* str, size_t destSize_char)
 {
-    GPIOIntClear(GPIO_PORTK_BASE, (uint32_t)(~((uint32_t)0)));
-
-
-    BaseType_t higherPriorityTaskWoken = pdFALSE;
-    //signal to task, pass it the current System Time
-    xTaskNotifyFromISR(messageTaskHandle,
-                       xTaskGetTickCountFromISR(),
-                       eSetValueWithOverwrite,
-                       &higherPriorityTaskWoken);
-    portYIELD_FROM_ISR(higherPriorityTaskWoken); //return to the higher priority (than the currently interrupted) task from the ISR, if one has been woken
+    if((strlen(dest) + strlen(str) + 1) <= destSize_char){ //if the dest can hold the resultant string
+        strcat(dest, str);
+        return true;
+    }
+    else{
+        return false;
+    }
 }
 
-static void message_task(void* pvParameters)
+static void dutARx_callback(char* str)
 {
-    while(true){
-        TickType_t invocTime;
-        xTaskNotifyWait(0,
-                        UINT32_MAX,
-                        ((uint32_t*)(&invocTime)),
-                        portMAX_DELAY);
+    static const char pattern1[] = "$GNRMC";
+    static const char* next1 = pattern1;
 
-        Dut dutPps;
+    static const char pattern2[] = "$GPRMC";
+    static const char* next2 = pattern1;
 
-        taskENTER_CRITICAL();
-        {
-            dutPps = dut; //copy the dut
+    static char messBuff[256] = {'\0'};
+    const size_t messBuff_length = sizeof(messBuff) / sizeof(char);
+    const char*const messBuffEnd = messBuff + (messBuff_length - 1);
 
-            if(dut.status != captured){ //if the DUT PPS is not currently waiting to be paired to a ref PPS
-                dut.status = waiting; //reset the DUT PPS
+    const char* pos;
+    static bool triggered = false;
+
+    if(!triggered){ //if the trigger is inactive
+        triggered = stateMachine(str, &pos, pattern1, &next1);
+
+        if(!triggered){
+            triggered = stateMachine(str, &pos, pattern2, &next2);
+        }
+
+        if(triggered){
+            for(; ((*pos) != '\n' && (*pos) != '\0'); pos++); //push pos to the nearest new line (end of the starting NMEA message) or to the end of the snippet
+
+            if((*pos) == '\n'){ //if the new line was found
+                char nextChar = *(pos + 1); //save the next char
+                *((char*)(pos + 1)) = '\0'; //terminate the end of the starting message
+                safeCat(messBuff, str, messBuff_length); //forward the (end of the) starting NMEA message
+                *((char*)(pos + 1)) = nextChar; //restore the char
+
+                safeCat(messBuff, printSkew(), messBuff_length); //print the skew
+
+                safeCat(messBuff, pos + 1, messBuff_length);//forward the rest of the snippet
+
+                triggered = false; //the trigger has been serviced
             }
-            else{ //if the PPS is captured but not paired yet
-                xEventGroupClearBits(flags, ppsReadyFlag);//clear the ready flag
+            else{ //if the snippet didn't have the new line
+                safeCat(messBuff, str, messBuff_length); //forward the snippet
             }
         }
-        taskEXIT_CRITICAL();
+        else{
+            safeCat(messBuff, str, messBuff_length); //forward the snippet
+        }
+    }
+    else{ //if the trigger is active
+        pos = str; //set pos to the beginning of the snippet
 
-        if(dutPps.status != waiting){ //if a PPS was captured
-            float d = calcTimeDiff_ms(dutPps.sysTime, invocTime); //calculate the delay
+        for(; ((*pos) != '\n' && (*pos) != '\0'); pos++); //push pos to the nearest new line (end of the starting NMEA message) or to the end of the snippet
 
-            char str[100];
-            sprintf(str, "D: %.2f ms\t\t", d);
-            uartPrint(usb, str);
+        if((*pos) == '\n'){ //if the new line was found
+            char nextChar = *(pos + 1); //save the next char
+            *((char*)(pos + 1)) = '\0'; //terminate the end of the starting message
+            safeCat(messBuff, str, messBuff_length); //forward the (end of the) starting NMEA message
+            *((char*)(pos + 1)) = nextChar; //restore the char
 
-            if(d < D_PPS_MESSAGE_MS){ //if the PPS is in time
-                if(dutPps.status == captured){ //if the PPS was in a captured state
-                    //wait for it to get finalized
-                    xEventGroupWaitBits(flags,
-                                        ppsReadyFlag,
-                                        pdTRUE, //clear the flags
-                                        pdTRUE, //all the flags are required (to be set)
-                                        portMAX_DELAY); //block indefinitely
+            safeCat(messBuff, printSkew(), messBuff_length); //print the skew
 
-                    taskENTER_CRITICAL();
-                    {
-                        dutPps = dut; //copy the dut
-                        dut.status = waiting; //reset the DUT PPS
-                    }
-                    taskEXIT_CRITICAL();
+            safeCat(messBuff, pos + 1, messBuff_length); //forward the rest of the snippet
+
+            triggered = false; //the trigger has been serviced
+        }
+        else{ //if the snippet didn't have the new line
+            safeCat(messBuff, str, messBuff_length); //forward the snippet
+        }
+    }
+
+
+
+
+    char* buffPos = messBuff;
+    char* newHead = messBuff;
+    while(true){
+        for(; ((*buffPos) != '\n' && (*buffPos) != '\0'); buffPos++); //push buffPos to the nearest new line or to the end of the buffer
+
+        if((*buffPos) == '\n'){ //if the end of an NMEA message was detected
+            (*buffPos) = '\0'; //terminate the message
+            uartPrintLf(usb, newHead); //send the message
+
+            buffPos++; //go to the next char
+            newHead = buffPos; //update the head
+        }
+        else{
+            break; //no more messages to be forwarded
+        }
+    }
+
+    if(newHead != messBuff){ //if the buffer needs to be left shifted
+        memmove(messBuff, newHead, (strlen(newHead) + 1) * sizeof(char));
+    }
+    else{ //no new lines were found
+        if(messBuffEnd == buffPos){ //the buffer is full, and there are no new lines
+            uartPrintLn(usb, messBuff); //dump the buffer
+            messBuff[0] = '\0'; ///reset the buffer
+        }
+    }
+}
+
+static bool stateMachine(const char* str, const char** pos, const char* pattern, const char** next)
+{
+    for(; ((*str) != '\0') && ((**next) != '\0'); str++){ //loop while the input string ends or the patter is matched
+        if((*str) == (**next)){ //if the current char in the input string matches the next char in the pattern
+            (*next)++; //this char of the patter has been matched, go to the next
+        }
+        else{ //if the current char is not the expected char in the pattern
+            *next = pattern; //reset the state machine
+        }
+    }
+
+    if((**next) == '\0'){ //if the patter was found
+        *pos = str - 1; //last char of pattern in input string
+
+        *next = pattern; //reset the state machine
+
+        return true;
+    }
+    else{ //if the patter hasn't yet been matched
+        return false;
+    }
+}
+
+static bool appendFloat(char* str, float val, size_t maxLength, bool addComma)
+{
+    const size_t precision = 2;
+
+
+    if((1 + 1 + precision) > maxLength){ //X.X...X
+        return false;
+    }
+
+    if(isnan(val)){ //if NaN
+        if(3 <= maxLength){
+            strcat(str, "NaN");
+
+            return true;
+        }
+        else{
+            return false;
+        }
+    }
+
+    if(isinf(val)){ //if inf
+        if(3 <= maxLength){
+            strcat(str, "inf");
+
+            return true;
+        }
+        else{
+            return false;
+        }
+    }
+
+    size_t i;
+
+    for(; (*str) != '\0'; str++); //get to the end
+    char* head = str;
+
+
+    for(i = 0; i < precision; i++){
+        val *= 10.0f;
+    }
+
+    //rounding
+    if(val >= 0){
+        val += 0.5f;
+    }
+    else{
+        val -= 0.5f;
+    }
+
+
+    if(fabsf(val) > ((float)INT64_MAX)){ //if the float is too big
+        return false;
+    }
+    else{
+        int64_t iVal = (int64_t)val;
+
+        i = 0;
+
+        if(iVal < 0){ //if negative
+            *(head++) = '-';
+            maxLength--;
+            iVal *= -1;
+        }
+
+        if(0 == iVal){
+            head[i++] ='0';
+            if(precision > 0){
+                head[i++] ='.';
+            }
+
+            size_t j;
+            for(j = 0; j < precision; j++){
+                head[i++] = '0';
+            }
+
+            return true;
+        }
+
+        while(0 != iVal && i < maxLength){
+            head[i++] = '0' + (iVal % 10);
+            iVal /= 10;
+
+            if(precision == i){
+                head[i++] = '.';
+                head[i++] = '0' + (iVal % 10);
+                iVal /= 10;
+            }
+        }
+
+        head[i] = '\0';
+
+        if(i >= maxLength && 0 != iVal){ //if the number was too long
+            return false;
+        }else{ //reverse the order
+            char* A = head;
+            char* B = head + (i - 1);
+
+            for(; A < B;(A++, B--)){
+                char ch = *A;
+                *A = *B;
+                *B = ch;
+            }
+
+            if(addComma){
+                head[i++] = ',';
+                head[i] = '\0';
+            }
+
+            return true;
+        }
+    }
+}
+
+static const char* printSkew(void)
+{
+    float D, skew_ns;
+    SkewStatus skewStatus = getSkew(&D, &skew_ns);
+
+    static char str[100];
+
+    strcpy(str, "$SKEW,");
+
+    switch(skewStatus){
+        case OK:
+            if(fabsf(skew_ns) < 1.0e9f){ //if the skew is smaller than 1s
+                appendFloat(str, D, 10, true);
+                appendFloat(str, skew_ns, 20, true);
+                strcat(str, "OK");
+            }
+            else{ //this shouldn't be possible, due to how the program is written
+                appendFloat(str, D, 10, true);
+                strcat(str, "inf,???");
+            }
+            break;
+
+        case ppsGlitch:
+            appendFloat(str, D, 10, true);
+            strcat(str, "NaN,GLITCH");
+            break;
+
+        case ppsOld:
+            appendFloat(str, D, 10, true);
+            strcat(str, "NaN,OLD");
+            break;
+
+        case ppsMissing:
+            strcat(str, "NaN,NaN,PPS_MISSING");
+            break;
+
+        case refMissing:
+            appendFloat(str, D, 10, true);
+            strcat(str, "NaN,REF_MISSING");
+            break;
+    }
+
+    addChecksum(str, 99, true, false, true);
+
+    return str;
+}
+
+static SkewStatus getSkew(float* D, float* skew_ns)
+{
+    TickType_t invocTime = xTaskGetTickCount();
+
+    Dut dutPps;
+
+    taskENTER_CRITICAL();
+    {
+        dutPps = dut; //copy the dut
+
+        if(dut.status != captured){ //if the DUT PPS is not currently waiting to be paired to a ref PPS
+            dut.status = waiting; //reset the DUT PPS
+        }
+        else{ //if the PPS is captured but not paired yet
+            xEventGroupClearBits(flags, ppsReadyFlag);//clear the ready flag
+        }
+    }
+    taskEXIT_CRITICAL();
+
+    SkewStatus skewStatus;
+
+    if(dutPps.status != waiting){ //if a PPS was captured
+        float d = calcTimeDiff_ms(dutPps.sysTime, invocTime); //calculate the delay
+
+        *D = d;
+
+        if(d < D_PPS_MESSAGE_MS){ //if the PPS is in time
+            if(dutPps.status == captured){ //if the PPS was in a captured state
+                //wait for it to get finalized
+                xEventGroupWaitBits(flags,
+                                    ppsReadyFlag,
+                                    pdTRUE, //clear the flags
+                                    pdTRUE, //all the flags are required (to be set)
+                                    portMAX_DELAY); //block indefinitely
+
+                taskENTER_CRITICAL();
+                {
+                    dutPps = dut; //copy the dut
+                    dut.status = waiting; //reset the DUT PPS
                 }
+                taskEXIT_CRITICAL();
+            }
 
-                switch(dutPps.status){
+            switch(dutPps.status){
                 case available: {
-                    float skew = ((float)dutPps.skew) * (1.0e9f / ((float)SystemCoreClock));
 
-                    char str[500];
-                    sprintf(str, "Skew: %.2f ns\t\traw skew: %lld", skew, dutPps.skew);
-                    uartPrintLn(usb, str);
+                    *skew_ns = ((float)dutPps.skew) * (1.0e9f / ((float)SystemCoreClock));
+
+                    skewStatus = OK;
 
                     break;
                 }
 
                 case glitch:{
-                    uartPrintLn(usb, "glitch");
-
+                    skewStatus = ppsGlitch;
                     break;
                 }
 
                 case missingRef:{
-                    uartPrintLn(usb, "missingRef");
-
+                    skewStatus = refMissing;
                     break;
                 }
-                }
-            }
-            else{ //if there isn't a PPS in the designated time window -> the PPS is missing
-                uartPrintLn(usb, "missingPPS: old");
             }
         }
-        else{ //if there was no PPS captured
-            uartPrintLn(usb, "missingPPS: waiting");
+        else{ //if there isn't a PPS in the designated time window -> the PPS is missing
+            skewStatus = ppsOld;
         }
     }
+    else{ //if there was no PPS captured
+        skewStatus = ppsMissing;
+    }
+
+    return skewStatus;
 }
 
 static uint32_t getTimerSnapshot(uint32_t base, uint32_t timer)
