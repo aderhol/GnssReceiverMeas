@@ -66,6 +66,12 @@ static void uart6Init(uint32_t baud);
 static void uart6Tx_task(void* pvParameters);
 static void uart6Rx_task(void* pvParameters);
 
+//dutB uplink
+static Port uart4 = {UART4_BASE, NULL, NULL, NULL, NULL, NULL, NULL};
+static void uart4Init(uint32_t baud);
+static void uart4Tx_task(void* pvParameters);
+static void uart4Rx_task(void* pvParameters);
+
 
 void uartInit(void)
 {
@@ -74,6 +80,8 @@ void uartInit(void)
     uart3Init(9600);
 
     uart6Init(9600);
+
+    uart4Init(115200);
 }
 
 /**************************************************    UART0   **************************************************/
@@ -191,6 +199,123 @@ static void uart0Rx_task(void* pvParameters)
 }
 
 /*^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^    UART0   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^*/
+
+
+/**************************************************    UART4   **************************************************/
+
+static void uart4Init(uint32_t baud)
+{
+    //enable UART pins
+    if(!SysCtlPeripheralReady(SYSCTL_PERIPH_GPIOK)){
+        SysCtlPeripheralEnable(SYSCTL_PERIPH_GPIOK);
+    }
+
+    //enables UART
+    SysCtlPeripheralEnable(SYSCTL_PERIPH_UART4);
+    while(!SysCtlPeripheralReady(SYSCTL_PERIPH_UART4)){} //wait for UART to be ready
+
+    //sets pins as UART pins
+    GPIOPinConfigure(GPIO_PK0_U4RX);
+    GPIOPinConfigure(GPIO_PK1_U4TX);
+
+    //configures UART pins (input/output)
+    GPIOPinTypeUART(GPIO_PORTK_BASE, (uint8_t)GPIO_PIN_0 | (uint8_t)GPIO_PIN_1);
+
+    //configure the UART modules
+    //UART4: baud-rate: baud, 8-bit, 1 STOP-bit, no parity-bit
+    //AND enables UART
+    UARTConfigSetExpClk(UART4_BASE, SystemCoreClock, baud, ((uint32_t)UART_CONFIG_WLEN_8 | (uint32_t)UART_CONFIG_STOP_ONE | (uint32_t)UART_CONFIG_PAR_NONE));
+    UARTFIFOEnable(UART4_BASE); //enables FIFOs
+    UARTFIFOLevelSet(UART4_BASE, UART_FIFO_TX2_8, UART_FIFO_RX4_8);
+    IntEnable(INT_UART4); //enables the UART4 interrupt
+    UARTIntEnable(UART4_BASE, (UART_INT_RT | UART_INT_RX | UART_INT_TX)); //unmasks Receive Timeout, receive FIFO, and transmit FIFO interrupts
+    IntPrioritySet(INT_UART4, INTERRUPT_PRIORITY << (8 - configPRIO_BITS)); //sets the interrupt priority (interrupt priority needs to be shifted to the upper 3 bits)
+
+    //Tx task creation
+    xTaskCreate(&uart4Tx_task,
+                "uart4TxTask",
+                512,
+                NULL, //parameter to task
+                TX_PRIORITY, //priority
+                &(uart4.Tx_task)); //task handle
+
+    uart4.Tx_queue = xQueueCreate(TX_QUEUE_LENGTH, sizeof(char)); //Tx queue creation
+    uart4.Tx_mutex = xSemaphoreCreateMutex();
+
+    //Rx task creation
+    xTaskCreate(&uart4Rx_task,
+                "uart4RxTask",
+                512,
+                NULL, //parameter to task
+                RX_PRIORITY, //priority
+                &(uart4.Rx_task)); //task handle
+
+    uart4.Rx_stream = xStreamBufferCreate(RX_STREAM_LENGTH, 1); //Rx stream creation (trigger level: 1 byte)
+}
+
+void uart4_ISR(void)
+{
+    uint32_t callers = UARTIntStatus(UART4_BASE, true);  //determines what triggered the interrupt
+    UARTIntClear(UART4_BASE, callers);  //clears the interrupt flags
+
+    BaseType_t higherPriorityTaskWoken = pdFALSE; //variable indicating whether the notification woke a task with a higher priority than the current task (which was interrupted)
+
+    if(0 != (callers & (uint32_t)UART_INT_TX)){ //if the Tx FIFO is almost empty
+
+        vTaskNotifyGiveFromISR(uart4.Tx_task, &higherPriorityTaskWoken); //send notification for the task, so that it refills the FIFO from the queue
+    }
+
+    if(0 != (callers & (uint32_t)(UART_INT_RX | UART_INT_RT))){ //if the Tx FIFO is half full, or it timed out
+        char buff[UART_FIFO_LENGTH + 1]; //buffer for the bytes read from the FIFO, longer by 1 in case a byte becomes available during processing
+        size_t cnt; //number of bytes received
+        int32_t ch = 0;
+
+        for(cnt = 0; ((ch = UARTCharGetNonBlocking(uart4.base)) != -1) && (cnt < (UART_FIFO_LENGTH + 1)); cnt++){ //loop while the receive FIFO is emptied or the buffer is full
+            buff[cnt] = (char)ch; //save the read char to the buffer
+         }
+
+        //send the received data to the stream
+        xStreamBufferSendFromISR(uart4.Rx_stream,
+                                 &buff,
+                                 (sizeof(char) * cnt),
+                                 &higherPriorityTaskWoken);
+    }
+
+    portYIELD_FROM_ISR(higherPriorityTaskWoken); //request context switch if a higher priority task has been woken
+}
+
+//sends the characters form the queue to the UART periphery, if notified
+static void uart4Tx_task(void* pvParameters)
+{
+    while(true){
+        fillTxFifo(&uart4); //fills UART4's Tx FIFO from the queue
+
+        ulTaskNotifyTake(pdTRUE, portMAX_DELAY); //waits for notification
+    }
+}
+
+#define UART4_RX_CALLBACK_BUFFER_LENGTH (20) //maximum amount of chars that can be put into the buffer
+//calls the callback function with the freshly received bytes
+static void uart4Rx_task(void* pvParameters)
+{
+    static char buff[UART4_RX_CALLBACK_BUFFER_LENGTH + 1]; //buffer for the received data
+    while(true){
+
+        //wait for data to be received
+        size_t cnt = xStreamBufferReceive(uart4.Rx_stream,
+                                          &buff,
+                                          (sizeof(char) * UART4_RX_CALLBACK_BUFFER_LENGTH),
+                                          portMAX_DELAY);
+
+        buff[cnt] = '\0'; //terminate the string
+
+        if(NULL != uart4.Rx_callback){ //if there is a callback set
+            uart4.Rx_callback(buff); //call the callback and pass the buffer
+        }
+    }
+}
+
+/*^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^    UART4   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^*/
 
 
 
@@ -443,6 +568,10 @@ static const Port* getPort(UartPort portNum)
 
         case (UartPort)6:
             port = &uart6;
+            break;
+
+        case (UartPort)4:
+            port = &uart4;
             break;
 
         default:

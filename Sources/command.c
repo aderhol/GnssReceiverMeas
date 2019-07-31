@@ -6,6 +6,7 @@
 
 //FreeRTOS includes
 #include <FreeRTOS.h>
+#include <task.h>
 #include <message_buffer.h>
 
 //driver includes
@@ -19,14 +20,42 @@
 const size_t bufferSize_byte = 1024;
 
 static MessageBufferHandle_t commandBuffer;
+static TaskHandle_t interpreterTaskHandle;
+static void interpreter_task(void* pvParameters);
 
 static void usbRx_callback(char* str);
+static void dutB_toPCRx_callback(char* str);
 
 void commandInit(void)
 {
     uartSetRxCallback(usb, &usbRx_callback);
+    uartSetRxCallback(dutB_toPC, &dutB_toPCRx_callback);
 
     commandBuffer = xMessageBufferCreate(bufferSize_byte);
+
+    xTaskCreate(&interpreter_task,
+                "interpreter task",
+                2048,
+                NULL,
+                1,
+                &interpreterTaskHandle);
+}
+
+
+static void interpreter_task(void* pvParameters)
+{
+    static char str[512];
+
+    while(true){
+        bool OK = 0 != xMessageBufferReceive(commandBuffer,
+                                             str,
+                                             sizeof(str),
+                                             portMAX_DELAY);
+
+        //needs heap2
+        /*vTaskGetRunTimeStats(str);
+        uartPrint(usb, str);*/
+    }
 }
 
 #define BUFFER_LENGTH (500)
@@ -74,7 +103,7 @@ static void usbRx_callback(char* str)
                         uartPrintLf(dutA_toDut, head); //forward the message to DUT A
                     }
                     else{ //if it is a command
-                        /*size_t totLen = (pos - head) + 1;
+                        size_t totLen = (pos - head) + 1;
                         if(totLen > 1){ //if the command is longer than just the '\n'
                             if('\r' == (*(pos - 1))){ //if the previous char is a carriage return
                                 (*((char*)(pos - 1)))  = '\0'; //remove the carriage return
@@ -100,7 +129,7 @@ static void usbRx_callback(char* str)
                                     uartPrintLn(usb, "ERROR: interpreter is busy");
                                 }
                             }
-                        }*/
+                        }
                     }
 
                     head = pos + 1;//move the head to the beginning of the next message
@@ -111,4 +140,10 @@ static void usbRx_callback(char* str)
         }
     }
 
+}
+
+
+static void dutB_toPCRx_callback(char* str)
+{
+    uartPrint(dutB_toDut, str);
 }

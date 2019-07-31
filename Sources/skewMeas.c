@@ -59,7 +59,7 @@ typedef struct{
     EventGroupHandle_t flags;
 }Dut;
 
-static volatile Dut dutA;
+static volatile Dut dutA, dutB;
 
 static volatile struct{
     int64_t time;
@@ -70,12 +70,16 @@ static volatile struct{
 void ISR_TIMER0_A(void);
 void ISR_TIMER2_A(void);
 void ISR_TIMER2_B(void);
+void ISR_TIMER3_A(void);
 
 static TaskHandle_t errTaskHandle;
 static void err_task(void* pvParameters);
 
 static TimerHandle_t dutAtimeoutTimerHandle;
 static void dutAtimeout_timerService(TimerHandle_t xTimer);
+
+static TimerHandle_t dutBtimeoutTimerHandle;
+static void dutBtimeout_timerService(TimerHandle_t xTimer);
 
 static bool checkRef(int64_t* skew, const Dut* dut);
 
@@ -86,15 +90,17 @@ static float calcTimeDiff_ms(TickType_t A, TickType_t B);
 static volatile int64_t overflowCount;
 
 static void dutARx_callback(char* str);
+static void dutBRx_callback(char* str);
 
 //overflow
 void ISR_TIMER0_A(void)
 {
     TimerIntClear(TIMER0_BASE, (uint32_t)(~((uint32_t)0))); //clear the interrupt
 
-    uint32_t capTimerIntStatus = TimerIntStatus(TIMER2_BASE, true); //get capture timer interrupt status
+    uint32_t capTimer2IntStatus = TimerIntStatus(TIMER2_BASE, true); //get capture timer interrupt status
+    uint32_t capTimer3IntStatus = TimerIntStatus(TIMER3_BASE, true); //get capture timer interrupt status
 
-    if(capTimerIntStatus & TIMER_CAPA_EVENT){ //if there is a pending ref PPS interrupt
+    if(capTimer2IntStatus & TIMER_CAPA_EVENT){ //if there is a pending ref PPS interrupt
         uint32_t timestamp = getTimerSnapshot(TIMER2_BASE, TIMER_A); //get the timestamp
 
         if(timestamp > (0xFFFFFFu / 2u)){ //if the timestamp is greater than half of the range of the counter than it is most likely that the ref PPS came before the overflow
@@ -103,12 +109,21 @@ void ISR_TIMER0_A(void)
         }
     }
 
-    if(capTimerIntStatus & TIMER_CAPB_EVENT){ //if there is a pending DUT PPS interrupt
+    if(capTimer2IntStatus & TIMER_CAPB_EVENT){ //if there is a pending dutA PPS interrupt
         uint32_t timestamp = getTimerSnapshot(TIMER2_BASE, TIMER_B); //get the timestamp
 
         if(timestamp > (0xFFFFFFu / 2u)){ //if the timestamp is greater than half of the range of the counter than it is most likely that the DUT PPS came before the overflow
             ISR_TIMER2_B(); //handle the ref PPS interrupt
             IntPendClear(INT_TIMER2B); //clear the pending interrupt in the NVIC
+        }
+    }
+
+    if(capTimer3IntStatus & TIMER_CAPA_EVENT){ //if there is a pending dutB PPS interrupt
+        uint32_t timestamp = getTimerSnapshot(TIMER3_BASE, TIMER_A); //get the timestamp
+
+        if(timestamp > (0xFFFFFFu / 2u)){ //if the timestamp is greater than half of the range of the counter than it is most likely that the DUT PPS came before the overflow
+            ISR_TIMER3_A(); //handle the ref PPS interrupt
+            IntPendClear(INT_TIMER3A); //clear the pending interrupt in the NVIC
         }
     }
 
@@ -125,9 +140,12 @@ void ISR_TIMER2_A(void)
     ref.availableForDutB = true; //the ref is now available
     ref.time = ((int64_t)getTimerSnapshot(TIMER2_BASE, TIMER_A)) + ((int64_t)(overflowCount<<24)); //saving the time of capture
 
-    if(dutA.status == captured){ //if the DUT PPS is waiting for a ref PPS
+
+    BaseType_t higherPriorityTaskWoken = pdFALSE;
+
+    if(dutA.status == captured){ //if the dutA PPS is waiting for a ref PPS
         int64_t skew;
-        if(checkRef(&skew, &dutA)){ //if the new ref can be paired to the pending dut PPS
+        if(checkRef(&skew, &dutA)){ //if the new ref can be paired to the pending dutA PPS
             dutA.skew = skew; //update the skew of the dut
             dutA.status = available; //the dut is now available
 
@@ -137,19 +155,37 @@ void ISR_TIMER2_A(void)
             dutA.status = missingRef;
         }
 
-        BaseType_t higherPriorityTaskWoken = pdFALSE;
-
         xEventGroupSetBitsFromISR(dutA.flags, ppsReadyFlag, &higherPriorityTaskWoken);
 
         //stop the timeout timer
         xTimerStopFromISR(dutAtimeoutTimerHandle,
                            &higherPriorityTaskWoken);
-
-        portYIELD_FROM_ISR(higherPriorityTaskWoken);
     }
+
+    if(dutB.status == captured){ //if the dutB PPS is waiting for a ref PPS
+        int64_t skew;
+        if(checkRef(&skew, &dutB)){ //if the new ref can be paired to the pending dutB PPS
+            dutB.skew = skew; //update the skew of the dut
+            dutB.status = available; //the dut is now available
+
+            ref.availableForDutB = false; //the ref has been used up / paired
+        }
+        else{ //if the new ref can't be paired to the captured PPS that means a ref PPS is missing
+            dutB.status = missingRef;
+        }
+
+        xEventGroupSetBitsFromISR(dutB.flags, ppsReadyFlag, &higherPriorityTaskWoken);
+
+        //stop the timeout timer
+        xTimerStopFromISR(dutBtimeoutTimerHandle,
+                           &higherPriorityTaskWoken);
+    }
+
+
+    portYIELD_FROM_ISR(higherPriorityTaskWoken);
 }
 
-//DUT PPS
+//DUT A PPS
 void ISR_TIMER2_B(void)
 {
     uint32_t callers = TimerIntStatus(TIMER2_BASE, true) & (~TIMER_CAPA_EVENT);   //determines what triggered the interrupt
@@ -207,6 +243,64 @@ void ISR_TIMER2_B(void)
     }
 }
 
+//DUT B PPS
+void ISR_TIMER3_A(void)
+{
+    uint32_t callers = TimerIntStatus(TIMER3_BASE, true) & (~TIMER_CAPB_EVENT);   //determines what triggered the interrupt
+    TimerIntClear(TIMER3_BASE, callers);    //clears the interrupt flags
+
+    if(dutB.status == waiting){
+        dutB.time = ((int64_t)getTimerSnapshot(TIMER3_BASE, TIMER_A)) + ((int64_t)(overflowCount<<24)); //save the capture time
+        dutB.sysTime = xTaskGetTickCountFromISR(); //save the current system time
+
+        if(ref.availableForDutB){ //if a ref PPS is available
+            int64_t skew;
+            if(checkRef(&skew, &dutB)){ //if the new ref can be paired to the new dut PPS
+                dutB.skew = skew; //update the skew of the dut
+                dutB.status = available; //the dut is now available
+            }
+            else{ //if the new dut PPS doesn't belong to the ref on record
+                dutB.status = captured;
+
+                //start the timeout timer
+                BaseType_t higherPriorityTaskWoken = pdFALSE;
+                xTimerStartFromISR(dutBtimeoutTimerHandle,
+                                   &higherPriorityTaskWoken);
+
+                //signal to task
+                xTaskNotifyFromISR(errTaskHandle,
+                                   2, //dutB
+                                   eSetValueWithOverwrite,
+                                   &higherPriorityTaskWoken);
+
+                portYIELD_FROM_ISR(higherPriorityTaskWoken); //return to the higher priority (than the currently interrupted) task from the ISR, if one has been woken
+            }
+            ref.availableForDutB = false; //the ref has been used up: paired or discarded
+        }
+        else{ //if a ref PPS is not immediately available
+            dutB.status = captured;
+
+            //start the timeout timer
+            BaseType_t higherPriorityTaskWoken = pdFALSE;
+            xTimerStartFromISR(dutBtimeoutTimerHandle,
+                               &higherPriorityTaskWoken);
+            portYIELD_FROM_ISR(higherPriorityTaskWoken);
+        }
+    }
+    else{ //if a new dut PPS came before the previous got handled
+        dutB.status = glitch; //a glitch occurred
+
+        BaseType_t higherPriorityTaskWoken = pdFALSE;
+        xEventGroupSetBitsFromISR(dutB.flags, ppsReadyFlag, &higherPriorityTaskWoken);
+
+        //stop the timeout timer
+        xTimerStopFromISR(dutBtimeoutTimerHandle,
+                           &higherPriorityTaskWoken);
+
+        portYIELD_FROM_ISR(higherPriorityTaskWoken);
+    }
+}
+
 static void dutAtimeout_timerService(TimerHandle_t xTimer)
 {
     taskENTER_CRITICAL();
@@ -218,6 +312,19 @@ static void dutAtimeout_timerService(TimerHandle_t xTimer)
     taskEXIT_CRITICAL();
 
     xEventGroupSetBits(dutA.flags, ppsReadyFlag);
+}
+
+static void dutBtimeout_timerService(TimerHandle_t xTimer)
+{
+    taskENTER_CRITICAL();
+    {
+        if(dutB.status == captured){
+            dutB.status = missingRef;
+        }
+    }
+    taskEXIT_CRITICAL();
+
+    xEventGroupSetBits(dutB.flags, ppsReadyFlag);
 }
 
 static bool checkRef(int64_t* skew, const Dut* dut)
@@ -243,6 +350,8 @@ void skewMeasInit(void)
     //initializes the global variables
     dutA.status = waiting;
     dutA.port = usb;
+    dutB.status = waiting;
+    dutB.port = dutB_toPC;
     ref.availableForDutA = false;
     ref.availableForDutB = false;
     overflowCount = 0;
@@ -251,6 +360,8 @@ void skewMeasInit(void)
 
     dutA.flags = xEventGroupCreate();
     xEventGroupClearBits(dutA.flags, ppsReadyFlag);
+    dutB.flags = xEventGroupCreate();
+    xEventGroupClearBits(dutB.flags, ppsReadyFlag);
 
     //enable the IO port for the input capture legs
     if(!SysCtlPeripheralReady(SYSCTL_PERIPH_GPIOM)) {
@@ -272,31 +383,48 @@ void skewMeasInit(void)
         while(!SysCtlPeripheralReady(SYSCTL_PERIPH_TIMER2)){}
     }
 
+    //TIMER3 is for input capture
+    //enables TIMER 3
+    if(!SysCtlPeripheralReady(SYSCTL_PERIPH_TIMER3)) {
+        SysCtlPeripheralEnable(SYSCTL_PERIPH_TIMER3);
+        while(!SysCtlPeripheralReady(SYSCTL_PERIPH_TIMER3)){}
+    }
+
     //configures timers for two-signal edge-separation
     GPIOPinConfigure(GPIO_PM0_T2CCP0);   //sets PM0 as the input capture input for TIMER2 TIMER A
     GPIOPinConfigure(GPIO_PM1_T2CCP1);   //sets PM1 as the input capture input for TIMER2 TIMER B
-    GPIOPinTypeTimer(GPIO_PORTM_BASE, GPIO_PIN_0 | GPIO_PIN_1); //configures the pins
+    GPIOPinConfigure(GPIO_PM2_T3CCP0);   //sets PM2 as the input capture input for TIMER3 TIMER A
+    GPIOPinTypeTimer(GPIO_PORTM_BASE, GPIO_PIN_0 | GPIO_PIN_1 | GPIO_PIN_2); //configures the pins
     TimerClockSourceSet(TIMER0_BASE, TIMER_CLOCK_SYSTEM);  //TIMER0 is clocked from the system clock
     TimerClockSourceSet(TIMER2_BASE, TIMER_CLOCK_SYSTEM);  //TIMER2 is clocked from the system clock
+    TimerClockSourceSet(TIMER3_BASE, TIMER_CLOCK_SYSTEM);  //TIMER3 is clocked from the system clock
     TimerConfigure(TIMER0_BASE, (TIMER_CFG_SPLIT_PAIR | TIMER_CFG_A_PERIODIC_UP)); //configures TIMER0
     TimerConfigure(TIMER2_BASE, (TIMER_CFG_SPLIT_PAIR | TIMER_CFG_A_CAP_TIME_UP | TIMER_CFG_B_CAP_TIME_UP)); //configures TIMER2 TIMER A/B
-    TimerControlEvent(TIMER2_BASE, TIMER_A, TIMER_EVENT_POS_EDGE);   //configures Timer A to capture rising edges
-    TimerControlEvent(TIMER2_BASE, TIMER_B, TIMER_EVENT_POS_EDGE);   //configures Timer B to capture rising edges
+    TimerConfigure(TIMER3_BASE, (TIMER_CFG_SPLIT_PAIR | TIMER_CFG_A_CAP_TIME_UP)); //configures TIMER3 TIMER A
+    TimerControlEvent(TIMER2_BASE, TIMER_A, TIMER_EVENT_POS_EDGE);   //configures Timer2 A to capture rising edges
+    TimerControlEvent(TIMER2_BASE, TIMER_B, TIMER_EVENT_POS_EDGE);   //configures Timer2 B to capture rising edges
+    TimerControlEvent(TIMER3_BASE, TIMER_A, TIMER_EVENT_POS_EDGE);   //configures Timer3 A to capture rising edges
     TimerIntEnable(TIMER0_BASE, TIMER_TIMA_TIMEOUT); //enables overflow interrupt on TIMER0 A
     TimerIntEnable(TIMER2_BASE, (TIMER_CAPB_EVENT | TIMER_CAPA_EVENT));   //enables interrupt for edge capture on TIMER2 TIMER A/B
+    TimerIntEnable(TIMER3_BASE, TIMER_CAPA_EVENT);   //enables interrupt for edge capture on TIMER3 TIMER A
     TimerLoadSet(TIMER0_BASE, TIMER_A, 0xFFFF); //sets the max value of the counter
     TimerPrescaleSet(TIMER0_BASE, TIMER_A, 0xFF); //sets the max value of the prescaler
     TimerLoadSet(TIMER2_BASE, TIMER_BOTH, 0xFFFF);
     TimerPrescaleSet(TIMER2_BASE, TIMER_BOTH, 0xFF);
+    TimerLoadSet(TIMER3_BASE, TIMER_A, 0xFFFF);
+    TimerPrescaleSet(TIMER3_BASE, TIMER_A, 0xFF);
     TimerEnable(TIMER2_BASE, TIMER_BOTH);
     TimerEnable(TIMER0_BASE, TIMER_A);
-    TimerSynchronize(TIMER0_BASE, (TIMER_0A_SYNC | TIMER_2A_SYNC | TIMER_2B_SYNC));  //Synchronizes TIMER0 A and TIMER2 A and B with each other
+    TimerEnable(TIMER3_BASE, TIMER_A);
+    TimerSynchronize(TIMER0_BASE, (TIMER_0A_SYNC | TIMER_2A_SYNC | TIMER_2B_SYNC | TIMER_3A_SYNC));  //Synchronizes TIMER0 A and TIMER2 A and B and TIMER3 A with each other
     IntEnable(INT_TIMER0A);
     IntPrioritySet(INT_TIMER0A, OVERFLOW_INTERRUPT_PRIORITY << (8 - configPRIO_BITS)); //the priority bits need to be shifted up, to the implemented bits
     IntEnable(INT_TIMER2A);
     IntPrioritySet(INT_TIMER2A, PPS_INTERRUPT_PRIORITY << (8 - configPRIO_BITS));
     IntEnable(INT_TIMER2B);
     IntPrioritySet(INT_TIMER2B, PPS_INTERRUPT_PRIORITY << (8 - configPRIO_BITS));
+    IntEnable(INT_TIMER3A);
+    IntPrioritySet(INT_TIMER3A, PPS_INTERRUPT_PRIORITY << (8 - configPRIO_BITS));
 
 
     xTaskCreate(&err_task,
@@ -312,8 +440,15 @@ void skewMeasInit(void)
                                       (void*) 0,
                                       &dutAtimeout_timerService);
 
+    dutBtimeoutTimerHandle = xTimerCreate("dutBtimeoutTimer",
+                                      pdMS_TO_TICKS(D_REF_DUT_MS),
+                                      pdFALSE,
+                                      (void*) 0,
+                                      &dutBtimeout_timerService);
+
     /******    UART    ******/
     uartSetRxCallback(dutA_toDut, &dutARx_callback);
+    uartSetRxCallback(dutB_toDut, &dutBRx_callback);
 }
 
 static void err_task(void* pvParameters)
@@ -327,6 +462,9 @@ static void err_task(void* pvParameters)
 
         if(1 == dutNum){
             uartPrintLn(dutA.port,"$EXTRAREF*0B");
+        }
+        else if(2 == dutNum){
+            uartPrintLn(dutB.port,"$EXTRAREF*0B");
         }
     }
 }
@@ -356,6 +494,14 @@ static void dutARx_callback(char* str)
     static char buff[DUT_A_RX_BUFF_LENGTH] = ""; //buffer for the character stream
 
     streamProcessor(str, buff, DUT_A_RX_BUFF_LENGTH, &dutA); //process the snippet, forward/print to usb
+}
+
+#define DUT_B_RX_BUFF_LENGTH   (300)
+static void dutBRx_callback(char* str)
+{
+    static char buff[DUT_B_RX_BUFF_LENGTH] = ""; //buffer for the character stream
+
+    streamProcessor(str, buff, DUT_B_RX_BUFF_LENGTH, &dutB); //process the snippet, forward/print to usb
 }
 
 static void streamProcessor(char* str, char buff[], size_t buffTotLength, const Dut* dut)

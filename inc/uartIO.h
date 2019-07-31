@@ -9,7 +9,8 @@ void uartInit(void);
 typedef enum{
     usb = 0,
     dutA_toDut = 3,
-    dutB_toDut = 6
+    dutB_toDut = 6,
+    dutB_toPC = 4
 }UartPort;
 
 typedef void (*UartRx_Callback)(char*);

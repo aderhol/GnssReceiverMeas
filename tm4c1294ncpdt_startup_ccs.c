@@ -61,6 +61,9 @@ extern void vPortSVCHandler(void);
 //UART0
 extern void uart0_ISR(void);
 
+//UART4
+extern void uart4_ISR(void);
+
 //UART3
 extern void uart3_ISR(void);
 
@@ -74,6 +77,7 @@ extern void I2C7_ISR(void);
 extern void ISR_TIMER0_A(void);
 extern void ISR_TIMER2_A(void);
 extern void ISR_TIMER2_B(void);
+extern void ISR_TIMER3_A(void);
 
 //*****************************************************************************
 //
@@ -137,7 +141,7 @@ void (* const g_pfnVectors[])(void) =
     IntDefaultHandler,                      // GPIO Port H
     IntDefaultHandler,                      // UART2 Rx and Tx
     IntDefaultHandler,                      // SSI1 Rx and Tx
-    IntDefaultHandler,                      // Timer 3 subtimer A
+    ISR_TIMER3_A,                      // Timer 3 subtimer A
     IntDefaultHandler,                      // Timer 3 subtimer B
     IntDefaultHandler,                      // I2C1 Master and Slave
     IntDefaultHandler,                      // CAN0
@@ -159,7 +163,7 @@ void (* const g_pfnVectors[])(void) =
     IntDefaultHandler,                      // SSI2 Rx and Tx
     IntDefaultHandler,                      // SSI3 Rx and Tx
     uart3_ISR,                      // UART3 Rx and Tx
-    IntDefaultHandler,                      // UART4 Rx and Tx
+    uart4_ISR,                      // UART4 Rx and Tx
     IntDefaultHandler,                      // UART5 Rx and Tx
     uart6_ISR,                      // UART6 Rx and Tx
     IntDefaultHandler,                      // UART7 Rx and Tx
