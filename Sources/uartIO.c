@@ -109,7 +109,7 @@ static void uart0Init(uint32_t baud)
     //Tx task creation
     xTaskCreate(&uart0Tx_task,
                 "uart0TxTask",
-                256,
+                512,
                 NULL, //parameter to task
                 TX_PRIORITY, //priority
                 &(uart0.Tx_task)); //task handle
@@ -227,7 +227,7 @@ static void uart3Init(uint32_t baud)
     //Tx task creation
     xTaskCreate(&uart3Tx_task,
                 "uart3TxTask",
-                256,
+                512,
                 NULL, //parameter to task
                 TX_PRIORITY, //priority
                 &(uart3.Tx_task)); //task handle
@@ -345,7 +345,7 @@ static void uart6Init(uint32_t baud)
     //Tx task creation
     xTaskCreate(&uart6Tx_task,
                 "uart6TxTask",
-                256,
+                512,
                 NULL, //parameter to task
                 TX_PRIORITY, //priority
                 &(uart6.Tx_task)); //task handle

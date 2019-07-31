@@ -8,8 +8,8 @@ void uartInit(void);
 //available UART ports
 typedef enum{
     usb = 0,
-    dutA = 3,
-    dutB = 6
+    dutA_toDut = 3,
+    dutB_toDut = 6
 }UartPort;
 
 typedef void (*UartRx_Callback)(char*);

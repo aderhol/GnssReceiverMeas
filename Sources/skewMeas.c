@@ -25,6 +25,8 @@
 #include <skewMeas.h>
 #include <uartIO.h>
 #include <nmea.h>
+#include <utility.h>
+#include <sensorHub.h>
 
 
 
@@ -37,21 +39,6 @@ static const int16_t D_PPS_MESSAGE_MS = 500; //the maximum delay in ms between t
 
 static int64_t dRefDut_clk; //the maximum skew in clock ticks under witch the ref and dut can be deemed a pair
 
-void ISR_TIMER0_A(void);
-void ISR_TIMER2_A(void);
-void ISR_TIMER2_B(void);
-
-static TaskHandle_t errTaskHandle;
-static void err_task(void* pvParameters);
-
-static TimerHandle_t timeoutTimerHandle;
-static void timeout_timerService(TimerHandle_t xTimer);
-
-static bool checkRef(int64_t* skew);
-
-static uint32_t getTimerSnapshot(uint32_t base, uint32_t timer);
-
-static float calcTimeDiff_ms(TickType_t A, TickType_t B);
 
 typedef enum{
     available,
@@ -61,7 +48,6 @@ typedef enum{
     missingRef
 }Status;
 
-static volatile EventGroupHandle_t flags; //<0>: sensor is initialized, <1>: data is ready
 static const EventBits_t ppsReadyFlag = ((EventBits_t) 1) << 0;
 
 typedef struct{
@@ -69,14 +55,33 @@ typedef struct{
     int64_t skew;
     Status status;
     TickType_t sysTime;
+    UartPort port;
+    EventGroupHandle_t flags;
 }Dut;
 
-static volatile Dut dut;
+static volatile Dut dutA;
 
 static volatile struct{
     int64_t time;
-    bool available;
+    bool availableForDutA;
+    bool availableForDutB;
 }ref;
+
+void ISR_TIMER0_A(void);
+void ISR_TIMER2_A(void);
+void ISR_TIMER2_B(void);
+
+static TaskHandle_t errTaskHandle;
+static void err_task(void* pvParameters);
+
+static TimerHandle_t dutAtimeoutTimerHandle;
+static void dutAtimeout_timerService(TimerHandle_t xTimer);
+
+static bool checkRef(int64_t* skew, const Dut* dut);
+
+static uint32_t getTimerSnapshot(uint32_t base, uint32_t timer);
+
+static float calcTimeDiff_ms(TickType_t A, TickType_t B);
 
 static volatile int64_t overflowCount;
 
@@ -116,27 +121,28 @@ void ISR_TIMER2_A(void)
     uint32_t callers = TimerIntStatus(TIMER2_BASE, true) & (~TIMER_CAPB_EVENT);   //determines what triggered the interrupt
     TimerIntClear(TIMER2_BASE, callers);    //clears the interrupt flags
 
-    ref.available = true; //the ref is now available
+    ref.availableForDutA = true; //the ref is now available
+    ref.availableForDutB = true; //the ref is now available
     ref.time = ((int64_t)getTimerSnapshot(TIMER2_BASE, TIMER_A)) + ((int64_t)(overflowCount<<24)); //saving the time of capture
 
-    if(dut.status == captured){ //if the DUT PPS is waiting for a ref PPS
+    if(dutA.status == captured){ //if the DUT PPS is waiting for a ref PPS
         int64_t skew;
-        if(checkRef(&skew)){ //if the new ref can be paired to the pending dut PPS
-            dut.skew = skew; //update the skew of the dut
-            dut.status = available; //the dut is now available
+        if(checkRef(&skew, &dutA)){ //if the new ref can be paired to the pending dut PPS
+            dutA.skew = skew; //update the skew of the dut
+            dutA.status = available; //the dut is now available
 
-            ref.available = false; //the ref has been used up / paired
+            ref.availableForDutA = false; //the ref has been used up / paired
         }
         else{ //if the new ref can't be paired to the captured PPS that means a ref PPS is missing
-            dut.status = missingRef;
+            dutA.status = missingRef;
         }
 
         BaseType_t higherPriorityTaskWoken = pdFALSE;
 
-        xEventGroupSetBitsFromISR(flags, ppsReadyFlag, &higherPriorityTaskWoken);
+        xEventGroupSetBitsFromISR(dutA.flags, ppsReadyFlag, &higherPriorityTaskWoken);
 
         //stop the timeout timer
-        xTimerStopFromISR(timeoutTimerHandle,
+        xTimerStopFromISR(dutAtimeoutTimerHandle,
                            &higherPriorityTaskWoken);
 
         portYIELD_FROM_ISR(higherPriorityTaskWoken);
@@ -149,74 +155,76 @@ void ISR_TIMER2_B(void)
     uint32_t callers = TimerIntStatus(TIMER2_BASE, true) & (~TIMER_CAPA_EVENT);   //determines what triggered the interrupt
     TimerIntClear(TIMER2_BASE, callers);    //clears the interrupt flags
 
-    if(dut.status == waiting){
-        dut.time = ((int64_t)getTimerSnapshot(TIMER2_BASE, TIMER_B)) + ((int64_t)(overflowCount<<24)); //save the capture time
-        dut.sysTime = xTaskGetTickCountFromISR(); //save the current system time
+    if(dutA.status == waiting){
+        dutA.time = ((int64_t)getTimerSnapshot(TIMER2_BASE, TIMER_B)) + ((int64_t)(overflowCount<<24)); //save the capture time
+        dutA.sysTime = xTaskGetTickCountFromISR(); //save the current system time
 
-        if(ref.available){ //if a ref PPS is available
+        if(ref.availableForDutA){ //if a ref PPS is available
             int64_t skew;
-            if(checkRef(&skew)){ //if the new ref can be paired to the new dut PPS
-                dut.skew = skew; //update the skew of the dut
-                dut.status = available; //the dut is now available
+            if(checkRef(&skew, &dutA)){ //if the new ref can be paired to the new dut PPS
+                dutA.skew = skew; //update the skew of the dut
+                dutA.status = available; //the dut is now available
             }
             else{ //if the new dut PPS doesn't belong to the ref on record
-                dut.status = captured;
+                dutA.status = captured;
 
                 //start the timeout timer
                 BaseType_t higherPriorityTaskWoken = pdFALSE;
-                xTimerStartFromISR(timeoutTimerHandle,
+                xTimerStartFromISR(dutAtimeoutTimerHandle,
                                    &higherPriorityTaskWoken);
 
                 //signal to task
-                vTaskNotifyGiveFromISR(errTaskHandle,
-                                &higherPriorityTaskWoken);
+                xTaskNotifyFromISR(errTaskHandle,
+                                   1, //dutA
+                                   eSetValueWithOverwrite,
+                                   &higherPriorityTaskWoken);
 
                 portYIELD_FROM_ISR(higherPriorityTaskWoken); //return to the higher priority (than the currently interrupted) task from the ISR, if one has been woken
             }
-            ref.available = false; //the ref has been used up: paired or discarded
+            ref.availableForDutA = false; //the ref has been used up: paired or discarded
         }
         else{ //if a ref PPS is not immediately available
-            dut.status = captured;
+            dutA.status = captured;
 
             //start the timeout timer
             BaseType_t higherPriorityTaskWoken = pdFALSE;
-            xTimerStartFromISR(timeoutTimerHandle,
+            xTimerStartFromISR(dutAtimeoutTimerHandle,
                                &higherPriorityTaskWoken);
             portYIELD_FROM_ISR(higherPriorityTaskWoken);
         }
     }
     else{ //if a new dut PPS came before the previous got handled
-        dut.status = glitch; //a glitch occurred
+        dutA.status = glitch; //a glitch occurred
 
         BaseType_t higherPriorityTaskWoken = pdFALSE;
-        xEventGroupSetBitsFromISR(flags, ppsReadyFlag, &higherPriorityTaskWoken);
+        xEventGroupSetBitsFromISR(dutA.flags, ppsReadyFlag, &higherPriorityTaskWoken);
 
         //stop the timeout timer
-        xTimerStopFromISR(timeoutTimerHandle,
+        xTimerStopFromISR(dutAtimeoutTimerHandle,
                            &higherPriorityTaskWoken);
 
         portYIELD_FROM_ISR(higherPriorityTaskWoken);
     }
 }
 
-static void timeout_timerService(TimerHandle_t xTimer)
+static void dutAtimeout_timerService(TimerHandle_t xTimer)
 {
     taskENTER_CRITICAL();
     {
-        if(dut.status == captured){
-            dut.status = missingRef;
+        if(dutA.status == captured){
+            dutA.status = missingRef;
         }
     }
     taskEXIT_CRITICAL();
 
-    xEventGroupSetBits(flags, ppsReadyFlag);
+    xEventGroupSetBits(dutA.flags, ppsReadyFlag);
 }
 
-static bool checkRef(int64_t* skew)
+static bool checkRef(int64_t* skew, const Dut* dut)
 {
     int64_t d;
 
-    d = dut.time - ref.time; //calculate the skew
+    d = dut->time - ref.time; //calculate the skew
 
     //save the skew to the output variable if the input pointer is valid
     if(skew != NULL){
@@ -233,14 +241,16 @@ extern uint32_t SystemCoreClock; //actual system core clock frequency in Hz (bui
 void skewMeasInit(void)
 {
     //initializes the global variables
-    dut.status = waiting;
-    ref.available = false;
+    dutA.status = waiting;
+    dutA.port = usb;
+    ref.availableForDutA = false;
+    ref.availableForDutB = false;
     overflowCount = 0;
     dRefDut_clk = (((int64_t)SystemCoreClock) / ((int64_t)1000)) * D_REF_DUT_MS;
-    dPpsMessage_clk = (((int64_t)SystemCoreClock) / ((int64_t)1000)) * D_PPS_MESSAGE_MS;
+    //dPpsMessage_clk = (((int64_t)SystemCoreClock) / ((int64_t)1000)) * D_PPS_MESSAGE_MS;
 
-    flags = xEventGroupCreate();
-    xEventGroupClearBits(flags, ppsReadyFlag);
+    dutA.flags = xEventGroupCreate();
+    xEventGroupClearBits(dutA.flags, ppsReadyFlag);
 
     //enable the IO port for the input capture legs
     if(!SysCtlPeripheralReady(SYSCTL_PERIPH_GPIOM)) {
@@ -296,312 +306,198 @@ void skewMeasInit(void)
                 2,
                 &errTaskHandle);
 
-    timeoutTimerHandle = xTimerCreate("timeoutTimer",
+    dutAtimeoutTimerHandle = xTimerCreate("dutAtimeoutTimer",
                                       pdMS_TO_TICKS(D_REF_DUT_MS),
                                       pdFALSE,
                                       (void*) 0,
-                                      &timeout_timerService);
+                                      &dutAtimeout_timerService);
 
     /******    UART    ******/
-    uartSetRxCallback(dutA, &dutARx_callback);
+    uartSetRxCallback(dutA_toDut, &dutARx_callback);
 }
 
 static void err_task(void* pvParameters)
 {
     while(true){
-        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+        uint32_t dutNum; //A:1 B:2
+        xTaskNotifyWait(0,
+                        UINT32_MAX,
+                        &dutNum,
+                        portMAX_DELAY);
 
-        uartPrintLn(usb,"$EXTRAREF*0B");
+        if(1 == dutNum){
+            uartPrintLn(dutA.port,"$EXTRAREF*0B");
+        }
     }
 }
 
-static bool stateMachine(const char* str, const char** pos, const char* pattern, const char** next);
 
 typedef enum{
-    OK,
+    skewOK,
     ppsGlitch,
     ppsOld,
     ppsMissing,
     refMissing
 }SkewStatus;
 
-static SkewStatus getSkew(float* D, float* skew_ns);
-static const char* printSkew(void);
+static SkewStatus getSkew(float* D, float* skew_ns, const Dut* dut);
+static const char* printSkew(const Dut* dut); //with the new line at the end
+static const char* printSenMeas();
+static void streamProcessor(char* str, char buff[], size_t buffTotLength, const Dut* dut);
 
-static bool safeCat(char* dest, const char* str, size_t destSize_char)
-{
-    if((strlen(dest) + strlen(str) + 1) <= destSize_char){ //if the dest can hold the resultant string
-        strcat(dest, str);
-        return true;
-    }
-    else{
-        return false;
-    }
-}
+static const char pattern1[] = "$GNRMC";
+static const size_t pattern1Length = (sizeof(pattern1) / sizeof(char)) - 1;
+static const char pattern2[] = "$GPRMC";
+static const size_t pattern2Length = (sizeof(pattern2) / sizeof(char)) - 1;
 
+#define DUT_A_RX_BUFF_LENGTH   (300)
 static void dutARx_callback(char* str)
 {
-    static const char pattern1[] = "$GNRMC";
-    static const char* next1 = pattern1;
+    static char buff[DUT_A_RX_BUFF_LENGTH] = ""; //buffer for the character stream
 
-    static const char pattern2[] = "$GPRMC";
-    static const char* next2 = pattern1;
-
-    static char messBuff[256] = {'\0'};
-    const size_t messBuff_length = sizeof(messBuff) / sizeof(char);
-    const char*const messBuffEnd = messBuff + (messBuff_length - 1);
-
-    const char* pos;
-    static bool triggered = false;
-
-    if(!triggered){ //if the trigger is inactive
-        triggered = stateMachine(str, &pos, pattern1, &next1);
-
-        if(!triggered){
-            triggered = stateMachine(str, &pos, pattern2, &next2);
-        }
-
-        if(triggered){
-            for(; ((*pos) != '\n' && (*pos) != '\0'); pos++); //push pos to the nearest new line (end of the starting NMEA message) or to the end of the snippet
-
-            if((*pos) == '\n'){ //if the new line was found
-                char nextChar = *(pos + 1); //save the next char
-                *((char*)(pos + 1)) = '\0'; //terminate the end of the starting message
-                safeCat(messBuff, str, messBuff_length); //forward the (end of the) starting NMEA message
-                *((char*)(pos + 1)) = nextChar; //restore the char
-
-                safeCat(messBuff, printSkew(), messBuff_length); //print the skew
-
-                safeCat(messBuff, pos + 1, messBuff_length);//forward the rest of the snippet
-
-                triggered = false; //the trigger has been serviced
-            }
-            else{ //if the snippet didn't have the new line
-                safeCat(messBuff, str, messBuff_length); //forward the snippet
-            }
-        }
-        else{
-            safeCat(messBuff, str, messBuff_length); //forward the snippet
-        }
-    }
-    else{ //if the trigger is active
-        pos = str; //set pos to the beginning of the snippet
-
-        for(; ((*pos) != '\n' && (*pos) != '\0'); pos++); //push pos to the nearest new line (end of the starting NMEA message) or to the end of the snippet
-
-        if((*pos) == '\n'){ //if the new line was found
-            char nextChar = *(pos + 1); //save the next char
-            *((char*)(pos + 1)) = '\0'; //terminate the end of the starting message
-            safeCat(messBuff, str, messBuff_length); //forward the (end of the) starting NMEA message
-            *((char*)(pos + 1)) = nextChar; //restore the char
-
-            safeCat(messBuff, printSkew(), messBuff_length); //print the skew
-
-            safeCat(messBuff, pos + 1, messBuff_length); //forward the rest of the snippet
-
-            triggered = false; //the trigger has been serviced
-        }
-        else{ //if the snippet didn't have the new line
-            safeCat(messBuff, str, messBuff_length); //forward the snippet
-        }
-    }
-
-
-
-
-    char* buffPos = messBuff;
-    char* newHead = messBuff;
-    while(true){
-        for(; ((*buffPos) != '\n' && (*buffPos) != '\0'); buffPos++); //push buffPos to the nearest new line or to the end of the buffer
-
-        if((*buffPos) == '\n'){ //if the end of an NMEA message was detected
-            (*buffPos) = '\0'; //terminate the message
-            uartPrintLf(usb, newHead); //send the message
-
-            buffPos++; //go to the next char
-            newHead = buffPos; //update the head
-        }
-        else{
-            break; //no more messages to be forwarded
-        }
-    }
-
-    if(newHead != messBuff){ //if the buffer needs to be left shifted
-        memmove(messBuff, newHead, (strlen(newHead) + 1) * sizeof(char));
-    }
-    else{ //no new lines were found
-        if(messBuffEnd == buffPos){ //the buffer is full, and there are no new lines
-            uartPrintLn(usb, messBuff); //dump the buffer
-            messBuff[0] = '\0'; ///reset the buffer
-        }
-    }
+    streamProcessor(str, buff, DUT_A_RX_BUFF_LENGTH, &dutA); //process the snippet, forward/print to usb
 }
 
-static bool stateMachine(const char* str, const char** pos, const char* pattern, const char** next)
+static void streamProcessor(char* str, char buff[], size_t buffTotLength, const Dut* dut)
 {
-    for(; ((*str) != '\0') && ((**next) != '\0'); str++){ //loop while the input string ends or the patter is matched
-        if((*str) == (**next)){ //if the current char in the input string matches the next char in the pattern
-            (*next)++; //this char of the patter has been matched, go to the next
+    bool runProcessing;
+
+    if(str[0] != '\0'){ //if the snippet is not an empty string
+        size_t strLen = strlen(str); //the length of the snippet (not including the terminating '\0')
+        size_t buffLen = strlen(buff); //the length of the buffer
+
+        if((buffLen + strLen + 1) > buffTotLength){ //if the buffer doesn't have enough space
+            if((strLen + 1) > buffTotLength){ //if the snippet is just too long (longer than the entire buffer)
+                uartPrint(dut->port, buff); //print the buffer
+                buff[0] = '\0'; //clean the buffer
+
+                uartPrint(dut->port, str); //print the snippet
+
+                runProcessing = false;
+            }
+            else{ //if the buffer is large enough: the buffer can't possibly be empty in this case
+                uartPrint(dut->port, buff); //print the buffer
+                //buff[0] = '\0'; doesn't needed because of strcpy //clean the buffer
+
+                strcpy(buff, str); //move the snippet into the buffer
+
+                runProcessing = true;
+            }
         }
-        else{ //if the current char is not the expected char in the pattern
-            *next = pattern; //reset the state machine
+        else{ //if the buffer has enough space
+            strcat(buff, str); //copy the snippet into the buffer
+
+            runProcessing = true;
         }
-    }
 
-    if((**next) == '\0'){ //if the patter was found
-        *pos = str - 1; //last char of pattern in input string
+        /**** processing ****/
+        if(runProcessing){
+            const char* pos;
+            const char* head = buff; //the head of the current message
+            for(pos = buff + buffLen; (*pos) != '\0'; pos++){ //run until the whole buffer is processed, start with the first unprocessed character
+                if((*pos) == '\n'){ //if the end of a message is detected
+                    (*((char*)pos)) = '\0'; //terminate the message
 
-        *next = pattern; //reset the state machine
+                    uartPrintLf(dut->port, head); //forward the message
 
-        return true;
-    }
-    else{ //if the patter hasn't yet been matched
-        return false;
+                    //check if this message is a block starter
+                    bool trigger = (strncmp(head, pattern1, pattern1Length) == 0);
+                    if(!trigger){
+                        trigger = (strncmp(head, pattern2, pattern2Length) == 0);
+                    }
+
+                    if(trigger){ //if the start of an NMEA block was detected
+                        uartPrint(dut->port, printSkew(dut)); //sends the skew
+                        uartPrint(dut->port, printSenMeas()); //sends the skew
+                    }
+
+                    head = pos + 1;//move the head to the beginning of the next message
+                }
+            }
+
+            memmove(buff, head, (strlen(head) + 1) * sizeof(char)); //shifts the buffer up
+        }
     }
 }
 
-static bool appendFloat(char* str, float val, size_t maxLength, bool addComma)
+
+static const char* printSenMeas()
 {
-    const size_t precision = 2;
+    SensorData sensorData;
+    bool OK;
+    static char str[300];
 
+    strcpy(str, "$SENDAT,"); //Initializing str
 
-    if((1 + 1 + precision) > maxLength){ //X.X...X
-        return false;
-    }
+    OK = getSample(&sensorData); //get the sample
 
-    if(isnan(val)){ //if NaN
-        if(3 <= maxLength){
-            strcat(str, "NaN");
+    if(OK){ //if the sample is valid
+        float age = calcTimeDiff_ms(sensorData.sysTime, xTaskGetTickCount());
+        OK = (fabsf(age) < 500); //is the sample fresh enough?
 
-            return true;
+        appendFloat(str, sensorData.temperature_C_bmp180, 2, 10, true); //append bmp180 temperature
+        strcat(str, "°C,");
+        appendFloat(str, sensorData.pressure_Pa, 2, 10, true); //append pressure
+        strcat(str, "Pa,");
+
+        appendFloat(str, sensorData.visibleLightIntensity_lx, 2, 10, true); //append visible light intensity
+        strcat(str, "lx,");
+        appendFloat(str, ((float)sensorData.infraredLighIntensity), 0, 10, true); //append infrared light intensity
+        strcat(str, ",");
+
+        appendFloat(str, sensorData.temperature_C_sht21, 2, 10, true); //append sht21 temperature
+        strcat(str, "°C,");
+        appendFloat(str, sensorData.relativeHumidity_percentage, 2, 10, true); //append relative humidity
+        strcat(str, "%,");
+
+        appendFloat(str, age, 0, 10, true); //append sample age
+        strcat(str, "ms,");
+
+        if(OK){ //if the sample is fresh enough
+            strcat(str, "OK");
         }
-        else{
-            return false;
-        }
-    }
-
-    if(isinf(val)){ //if inf
-        if(3 <= maxLength){
-            strcat(str, "inf");
-
-            return true;
-        }
-        else{
-            return false;
-        }
-    }
-
-    size_t i;
-
-    for(; (*str) != '\0'; str++); //get to the end
-    char* head = str;
-
-
-    for(i = 0; i < precision; i++){
-        val *= 10.0f;
-    }
-
-    //rounding
-    if(val >= 0){
-        val += 0.5f;
-    }
-    else{
-        val -= 0.5f;
-    }
-
-
-    if(fabsf(val) > ((float)INT64_MAX)){ //if the float is too big
-        return false;
-    }
-    else{
-        int64_t iVal = (int64_t)val;
-
-        i = 0;
-
-        if(iVal < 0){ //if negative
-            *(head++) = '-';
-            maxLength--;
-            iVal *= -1;
+        else{ //if the sample is too old
+            strcat(str, "OLD");
         }
 
-        if(0 == iVal){
-            head[i++] ='0';
-            if(precision > 0){
-                head[i++] ='.';
-            }
-
-            size_t j;
-            for(j = 0; j < precision; j++){
-                head[i++] = '0';
-            }
-
-            return true;
-        }
-
-        while(0 != iVal && i < maxLength){
-            head[i++] = '0' + (iVal % 10);
-            iVal /= 10;
-
-            if(precision == i){
-                head[i++] = '.';
-                head[i++] = '0' + (iVal % 10);
-                iVal /= 10;
-            }
-        }
-
-        head[i] = '\0';
-
-        if(i >= maxLength && 0 != iVal){ //if the number was too long
-            return false;
-        }else{ //reverse the order
-            char* A = head;
-            char* B = head + (i - 1);
-
-            for(; A < B;(A++, B--)){
-                char ch = *A;
-                *A = *B;
-                *B = ch;
-            }
-
-            if(addComma){
-                head[i++] = ',';
-                head[i] = '\0';
-            }
-
-            return true;
-        }
+        addChecksum(str, 299, true, false, true);
     }
+    else{ //if the sample is invalid
+        strcat(str, "NaN,NaN,NaN,NaN,NaN,NaN,INVALID*74\r\n");
+    }
+
+    return str;
 }
 
-static const char* printSkew(void)
+static const char* printSkew(const Dut* dut)
 {
     float D, skew_ns;
-    SkewStatus skewStatus = getSkew(&D, &skew_ns);
+    SkewStatus skewStatus = getSkew(&D, &skew_ns, dut);
 
     static char str[100];
 
     strcpy(str, "$SKEW,");
 
     switch(skewStatus){
-        case OK:
+        case skewOK:
             if(fabsf(skew_ns) < 1.0e9f){ //if the skew is smaller than 1s
-                appendFloat(str, D, 10, true);
-                appendFloat(str, skew_ns, 20, true);
+                appendFloat(str, D, 2, 10, true);
+                appendFloat(str, skew_ns, 2, 20, true);
                 strcat(str, "OK");
             }
             else{ //this shouldn't be possible, due to how the program is written
-                appendFloat(str, D, 10, true);
+                appendFloat(str, D, 2, 10, true);
                 strcat(str, "inf,???");
             }
             break;
 
         case ppsGlitch:
-            appendFloat(str, D, 10, true);
+            appendFloat(str, D, 2, 10, true);
             strcat(str, "NaN,GLITCH");
             break;
 
         case ppsOld:
-            appendFloat(str, D, 10, true);
+            appendFloat(str, D, 2, 10, true);
             strcat(str, "NaN,OLD");
             break;
 
@@ -610,7 +506,7 @@ static const char* printSkew(void)
             break;
 
         case refMissing:
-            appendFloat(str, D, 10, true);
+            appendFloat(str, D, 2, 10, true);
             strcat(str, "NaN,REF_MISSING");
             break;
     }
@@ -620,7 +516,7 @@ static const char* printSkew(void)
     return str;
 }
 
-static SkewStatus getSkew(float* D, float* skew_ns)
+static SkewStatus getSkew(float* D, float* skew_ns, const Dut* dut)
 {
     TickType_t invocTime = xTaskGetTickCount();
 
@@ -628,13 +524,13 @@ static SkewStatus getSkew(float* D, float* skew_ns)
 
     taskENTER_CRITICAL();
     {
-        dutPps = dut; //copy the dut
+        dutPps = (*dut); //copy the dut
 
-        if(dut.status != captured){ //if the DUT PPS is not currently waiting to be paired to a ref PPS
-            dut.status = waiting; //reset the DUT PPS
+        if(dut->status != captured){ //if the DUT PPS is not currently waiting to be paired to a ref PPS
+            ((Dut*)dut)->status = waiting; //reset the DUT PPS
         }
         else{ //if the PPS is captured but not paired yet
-            xEventGroupClearBits(flags, ppsReadyFlag);//clear the ready flag
+            xEventGroupClearBits(dut->flags, ppsReadyFlag);//clear the ready flag
         }
     }
     taskEXIT_CRITICAL();
@@ -649,7 +545,7 @@ static SkewStatus getSkew(float* D, float* skew_ns)
         if(d < D_PPS_MESSAGE_MS){ //if the PPS is in time
             if(dutPps.status == captured){ //if the PPS was in a captured state
                 //wait for it to get finalized
-                xEventGroupWaitBits(flags,
+                xEventGroupWaitBits(dut->flags,
                                     ppsReadyFlag,
                                     pdTRUE, //clear the flags
                                     pdTRUE, //all the flags are required (to be set)
@@ -657,8 +553,8 @@ static SkewStatus getSkew(float* D, float* skew_ns)
 
                 taskENTER_CRITICAL();
                 {
-                    dutPps = dut; //copy the dut
-                    dut.status = waiting; //reset the DUT PPS
+                    dutPps = (*dut); //copy the dut
+                    ((Dut*)dut)->status = waiting; //reset the DUT PPS
                 }
                 taskEXIT_CRITICAL();
             }
@@ -668,7 +564,7 @@ static SkewStatus getSkew(float* D, float* skew_ns)
 
                     *skew_ns = ((float)dutPps.skew) * (1.0e9f / ((float)SystemCoreClock));
 
-                    skewStatus = OK;
+                    skewStatus = skewOK;
 
                     break;
                 }

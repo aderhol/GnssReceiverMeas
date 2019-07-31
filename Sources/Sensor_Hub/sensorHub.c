@@ -5,6 +5,8 @@
 //FreeRTOS includes
 #include <FreeRTOS.h>
 #include <task.h>
+#include <semphr.h>
+#include <timers.h>
 
 //driver includes
 #include <driverlib/gpio.h> //GPIO
@@ -25,20 +27,38 @@
 extern void senHubI2cInit(void);
 
 static void feedbackLED_task(void* pvParameters);
+static void sampling_task(void* pvParameters);
+static void sampling_timerService(TimerHandle_t xTimer);
 
-volatile TaskHandle_t feedbackLedTaskHandle;
+static TaskHandle_t feedbackLedTaskHandle;
+
+static TaskHandle_t samplingTaskHandle;
+static SemaphoreHandle_t samplingMutex;
 
 void sensorHubInit(TickType_t maxDelay_ticks)
 {
-    TaskHandle_t feedbackLedTaskHandle_;
     xTaskCreate(&feedbackLED_task,
                 "sensor feedback LED task",
                 256,
                 NULL,
                 1,
-                &feedbackLedTaskHandle_);
+                &feedbackLedTaskHandle);
 
-    feedbackLedTaskHandle = feedbackLedTaskHandle_;
+    xTaskCreate(&sampling_task,
+                "sensor sampling task",
+                512,
+                NULL,
+                1,
+                &samplingTaskHandle);
+
+    TimerHandle_t timer = xTimerCreate("samplingTimer",
+                                       pdMS_TO_TICKS(400),
+                                       pdTRUE,
+                                       (void*) 0,
+                                       &sampling_timerService);
+    xTimerStart(timer, 0);
+
+    samplingMutex = xSemaphoreCreateMutex();
 
 
     if(!SysCtlPeripheralReady(bp_LED.periphery)) {
@@ -75,6 +95,45 @@ bool sampleSensors(TickType_t maxDelay_ticks, SensorData* sensorData)
                 eSetValueWithOverwrite);
 
     return OK;
+}
+
+static volatile SensorData samplePoint;
+static bool senorDataValid = false;
+static void sampling_task(void* pvParameters)
+{
+    while(true){
+        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+
+        SensorData sample;
+        bool OK = sampleSensors(pdMS_TO_TICKS(150), &sample);
+        xSemaphoreTake(samplingMutex, portMAX_DELAY);
+        {
+            samplePoint = sample;
+            senorDataValid = OK;
+            samplePoint.sysTime = xTaskGetTickCount();
+        }
+        xSemaphoreGive(samplingMutex);
+    }
+}
+
+bool getSample(SensorData* sensorData)
+{
+    bool OK;
+
+    OK = (pdTRUE == xSemaphoreTake(samplingMutex, 1));
+    if(OK){
+        *sensorData = samplePoint;
+        OK = senorDataValid;
+
+        xSemaphoreGive(samplingMutex);
+    }
+
+    return OK;
+}
+
+static void sampling_timerService(TimerHandle_t xTimer)
+{
+    xTaskNotifyGive(samplingTaskHandle);
 }
 
 //1 flash: the sensors were sampled successfully, 2 flashes: the sensors couldn't be sampled
