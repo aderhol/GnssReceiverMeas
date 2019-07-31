@@ -7,6 +7,58 @@
 
 #include <utility.h>
 
+bool strcmp_bool(const char* str1, const char* str2)
+{
+    return (0 == strcmp(str1, str2));
+}
+
+char* strtok_r(char* str, const char* delimStr, char** work)
+{
+    char* token;
+
+    if (str != NULL) { //first token
+        char* delimChar = strpbrk(str, delimStr);
+
+        if (NULL == delimChar) {
+            *work = NULL;
+
+            token = str;
+        }
+        else {
+            *delimChar = '\0';
+
+            *work = (delimChar + 1);
+
+            token = str;
+        }
+    }
+    else { //next token
+        if (NULL == (*work) || '\0' == (*work)) { //if the end of the string has been reached
+            *work = NULL;
+
+            token = NULL;
+        }
+        else {
+            char* delimChar = strpbrk((*work), delimStr);
+
+            if (NULL == delimChar) {
+                token = (*work);
+
+                *work = NULL;
+            }
+            else {
+                *delimChar = '\0';
+
+                token = (*work);
+
+                *work = (delimChar + 1);
+            }
+        }
+    }
+
+    return token;
+}
+
 bool appendFloat(char* str, float val, size_t precision, size_t maxLength, bool addComma)
 {
     if((1 + 1 + precision) > maxLength){ //X.X...X

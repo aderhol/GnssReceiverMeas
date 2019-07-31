@@ -75,7 +75,7 @@ static void uart4Rx_task(void* pvParameters);
 
 void uartInit(void)
 {
-    uart0Init(1000000);
+    uart0Init(115200);
 
     uart3Init(9600);
 

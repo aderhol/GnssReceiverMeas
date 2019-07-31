@@ -3,6 +3,7 @@
 #include <stdbool.h>
 #include <string.h>
 #include <stddef.h>
+#include <ctype.h>
 
 //FreeRTOS includes
 #include <FreeRTOS.h>
@@ -13,6 +14,7 @@
 
 //user includes
 #include <uartIO.h>
+#include <utility.h>
 
 
 
@@ -51,6 +53,36 @@ static void interpreter_task(void* pvParameters)
                                              str,
                                              sizeof(str),
                                              portMAX_DELAY);
+
+        if(!OK){ //if something went wrong
+            uartPrintLn(usb, "ERROR: interpreter stopped.");
+            vTaskSuspend(xTaskGetCurrentTaskHandle()); //suspend task for ever
+        }
+        else{
+            char* work;
+            const char delimStr[] = " ";
+
+            char* command = strtok_r(str, delimStr, &work);
+            char* p;
+            for (p = command; '\0' != (*p); p++){
+                *p = tolower(*p);
+            }
+
+            if(strcmp_bool(command, "sitrep")){ //sitrep command
+                if(NULL == strtok_r(NULL, delimStr, &work)){ //no other tokens
+                    uartPrintLn(usb, "running");
+                }
+                else{ //incorrect usage
+                    const char usage[] = "Error: incorrect usage\r\n"
+                            "\tUsage:\r\n"
+                            "\t\tsitrep\r\n";
+                    uartPrint(usb, usage);
+                }
+            }
+            else{ //unknown command
+                uartPrintLn(usb, "ERROR: unknown command");
+            }
+        }
 
         //needs heap2
         /*vTaskGetRunTimeStats(str);
