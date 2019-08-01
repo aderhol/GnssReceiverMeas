@@ -582,7 +582,7 @@ static const char* printSenMeas()
         OK = (fabsf(age) < 500); //is the sample fresh enough?
 
         appendFloat(str, sensorData.temperature_C_bmp180, 2, 10, true); //append bmp180 temperature
-        strcat(str, "°C,");
+        strcat(str, "C,");
         appendFloat(str, sensorData.pressure_Pa, 2, 10, true); //append pressure
         strcat(str, "Pa,");
 
@@ -592,9 +592,9 @@ static const char* printSenMeas()
         strcat(str, ",");
 
         appendFloat(str, sensorData.temperature_C_sht21, 2, 10, true); //append sht21 temperature
-        strcat(str, "°C,");
+        strcat(str, "C,");
         appendFloat(str, sensorData.relativeHumidity_percentage, 2, 10, true); //append relative humidity
-        strcat(str, "%,");
+        strcat(str, "pct,");
 
         appendFloat(str, age, 0, 10, true); //append sample age
         strcat(str, "ms,");
@@ -605,12 +605,12 @@ static const char* printSenMeas()
         else{ //if the sample is too old
             strcat(str, "OLD");
         }
-
-        addChecksum(str, 299, true, false, true);
     }
     else{ //if the sample is invalid
-        strcat(str, "NaN,NaN,NaN,NaN,NaN,NaN,INVALID*74\r\n");
+        strcat(str, "NaN,C,NaN,Pa,NaN,lx,NaN,,NaN,C,NaN,pct,NaN,ms,INVALID");
     }
+
+    addChecksum(str, 299, true, false, true);
 
     return str;
 }
@@ -628,32 +628,34 @@ static const char* printSkew(const Dut* dut)
         case skewOK:
             if(fabsf(skew_ns) < 1.0e9f){ //if the skew is smaller than 1s
                 appendFloat(str, D, 2, 10, true);
+                strcat(str, "ms,");
                 appendFloat(str, skew_ns, 2, 20, true);
-                strcat(str, "OK");
+                strcat(str, "ns,OK");
             }
             else{ //this shouldn't be possible, due to how the program is written
                 appendFloat(str, D, 2, 10, true);
-                strcat(str, "inf,???");
+                strcat(str, "ms,");
+                strcat(str, "inf,ns,???");
             }
             break;
 
         case ppsGlitch:
             appendFloat(str, D, 2, 10, true);
-            strcat(str, "NaN,GLITCH");
+            strcat(str, "ms,NaN,ns,GLITCH");
             break;
 
         case ppsOld:
             appendFloat(str, D, 2, 10, true);
-            strcat(str, "NaN,OLD");
+            strcat(str, "ms,NaN,ns,OLD");
             break;
 
         case ppsMissing:
-            strcat(str, "NaN,NaN,PPS_MISSING");
+            strcat(str, "NaN,ms,NaN,ns,PPS_MISSING");
             break;
 
         case refMissing:
             appendFloat(str, D, 2, 10, true);
-            strcat(str, "NaN,REF_MISSING");
+            strcat(str, "ms,NaN,ns,REF_MISSING");
             break;
     }
 
