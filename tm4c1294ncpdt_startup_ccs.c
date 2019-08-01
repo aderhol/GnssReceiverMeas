@@ -78,6 +78,7 @@ extern void ISR_TIMER0_A(void);
 extern void ISR_TIMER2_A(void);
 extern void ISR_TIMER2_B(void);
 extern void ISR_TIMER3_A(void);
+extern void ISR_TIMER3_B(void);
 
 //*****************************************************************************
 //
@@ -142,7 +143,7 @@ void (* const g_pfnVectors[])(void) =
     IntDefaultHandler,                      // UART2 Rx and Tx
     IntDefaultHandler,                      // SSI1 Rx and Tx
     ISR_TIMER3_A,                      // Timer 3 subtimer A
-    IntDefaultHandler,                      // Timer 3 subtimer B
+    ISR_TIMER3_B,                      // Timer 3 subtimer B
     IntDefaultHandler,                      // I2C1 Master and Slave
     IntDefaultHandler,                      // CAN0
     IntDefaultHandler,                      // CAN1

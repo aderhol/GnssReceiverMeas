@@ -59,18 +59,20 @@ typedef struct{
     EventGroupHandle_t flags;
 }Dut;
 
-static volatile Dut dutA, dutB;
+static volatile Dut dutA, dutB, refCheck;
 
 static volatile struct{
     int64_t time;
     bool availableForDutA;
     bool availableForDutB;
+    bool availableForRefCheck;
 }ref;
 
 void ISR_TIMER0_A(void);
 void ISR_TIMER2_A(void);
 void ISR_TIMER2_B(void);
 void ISR_TIMER3_A(void);
+void ISR_TIMER3_B(void);
 
 static TaskHandle_t errTaskHandle;
 static void err_task(void* pvParameters);
@@ -80,6 +82,9 @@ static void dutAtimeout_timerService(TimerHandle_t xTimer);
 
 static TimerHandle_t dutBtimeoutTimerHandle;
 static void dutBtimeout_timerService(TimerHandle_t xTimer);
+
+static TimerHandle_t refCheckTimeoutTimerHandle;
+static void refCheckTimeout_timerService(TimerHandle_t xTimer);
 
 static bool checkRef(int64_t* skew, const Dut* dut);
 
@@ -91,6 +96,9 @@ static volatile int64_t overflowCount;
 
 static void dutARx_callback(char* str);
 static void dutBRx_callback(char* str);
+
+static TaskHandle_t refCheckTaskHandle;
+static void refCheck_task(void* pvParameters);
 
 //overflow
 void ISR_TIMER0_A(void)
@@ -127,6 +135,15 @@ void ISR_TIMER0_A(void)
         }
     }
 
+    if(capTimer3IntStatus & TIMER_CAPB_EVENT){ //if there is a pending ref check interrupt
+        uint32_t timestamp = getTimerSnapshot(TIMER3_BASE, TIMER_B); //get the timestamp
+
+        if(timestamp > (0xFFFFFFu / 2u)){ //if the timestamp is greater than half of the range of the counter than it is most likely that the DUT PPS came before the overflow
+            ISR_TIMER3_B(); //handle the ref PPS interrupt
+            IntPendClear(INT_TIMER3B); //clear the pending interrupt in the NVIC
+        }
+    }
+
     overflowCount++;
 }
 
@@ -138,6 +155,7 @@ void ISR_TIMER2_A(void)
 
     ref.availableForDutA = true; //the ref is now available
     ref.availableForDutB = true; //the ref is now available
+    ref.availableForRefCheck = true; //the ref is now available
     ref.time = ((int64_t)getTimerSnapshot(TIMER2_BASE, TIMER_A)) + ((int64_t)(overflowCount<<24)); //saving the time of capture
 
 
@@ -180,6 +198,28 @@ void ISR_TIMER2_A(void)
         xTimerStopFromISR(dutBtimeoutTimerHandle,
                            &higherPriorityTaskWoken);
     }
+
+    if(refCheck.status == captured){ //if the ref check is waiting for a ref PPS
+        int64_t skew;
+        if(checkRef(&skew, &refCheck)){ //if the new ref can be paired to the pending ref check
+            refCheck.skew = skew; //update the skew of the ref check
+            refCheck.status = available; //the ref check is now available
+
+            ref.availableForRefCheck = false; //the ref has been used up / paired
+        }
+        else{ //if the new ref can't be paired to the captured PPS that means a ref PPS is missing
+            refCheck.status = missingRef;
+        }
+
+        xEventGroupSetBitsFromISR(refCheck.flags, ppsReadyFlag, &higherPriorityTaskWoken);
+
+        //stop the timeout timer
+        xTimerStopFromISR(refCheckTimeoutTimerHandle,
+                           &higherPriorityTaskWoken);
+    }
+
+
+    vTaskNotifyGiveFromISR(refCheckTaskHandle, &higherPriorityTaskWoken); //trigger the refCheck routine
 
 
     portYIELD_FROM_ISR(higherPriorityTaskWoken);
@@ -301,6 +341,64 @@ void ISR_TIMER3_A(void)
     }
 }
 
+//ref check
+void ISR_TIMER3_B(void)
+{
+    uint32_t callers = TimerIntStatus(TIMER3_BASE, true) & (~TIMER_CAPA_EVENT);   //determines what triggered the interrupt
+    TimerIntClear(TIMER3_BASE, callers);    //clears the interrupt flags
+
+    if(refCheck.status == waiting){
+        refCheck.time = ((int64_t)getTimerSnapshot(TIMER3_BASE, TIMER_B)) + ((int64_t)(overflowCount<<24)); //save the capture time
+        refCheck.sysTime = xTaskGetTickCountFromISR(); //save the current system time
+
+        if(ref.availableForRefCheck){ //if a ref PPS is available
+            int64_t skew;
+            if(checkRef(&skew, &refCheck)){ //if the new ref can be paired to the new ref check
+                refCheck.skew = skew; //update the skew of the ref check
+                refCheck.status = available; //the ref check is now available
+            }
+            else{ //if the new ref check doesn't belong to the ref on record
+                refCheck.status = captured;
+
+                //start the timeout timer
+                BaseType_t higherPriorityTaskWoken = pdFALSE;
+                xTimerStartFromISR(refCheckTimeoutTimerHandle,
+                                   &higherPriorityTaskWoken);
+
+                //signal to task
+                xTaskNotifyFromISR(errTaskHandle,
+                                   3, //refCheck
+                                   eSetValueWithOverwrite,
+                                   &higherPriorityTaskWoken);
+
+                portYIELD_FROM_ISR(higherPriorityTaskWoken); //return to the higher priority (than the currently interrupted) task from the ISR, if one has been woken
+            }
+            ref.availableForRefCheck = false; //the ref has been used up: paired or discarded
+        }
+        else{ //if a ref PPS is not immediately available
+            refCheck.status = captured;
+
+            //start the timeout timer
+            BaseType_t higherPriorityTaskWoken = pdFALSE;
+            xTimerStartFromISR(refCheckTimeoutTimerHandle,
+                               &higherPriorityTaskWoken);
+            portYIELD_FROM_ISR(higherPriorityTaskWoken);
+        }
+    }
+    else{ //if a new ref check came before the previous got handled
+        refCheck.status = glitch; //a glitch occurred
+
+        BaseType_t higherPriorityTaskWoken = pdFALSE;
+        xEventGroupSetBitsFromISR(refCheck.flags, ppsReadyFlag, &higherPriorityTaskWoken);
+
+        //stop the timeout timer
+        xTimerStopFromISR(refCheckTimeoutTimerHandle,
+                           &higherPriorityTaskWoken);
+
+        portYIELD_FROM_ISR(higherPriorityTaskWoken);
+    }
+}
+
 static void dutAtimeout_timerService(TimerHandle_t xTimer)
 {
     taskENTER_CRITICAL();
@@ -325,6 +423,19 @@ static void dutBtimeout_timerService(TimerHandle_t xTimer)
     taskEXIT_CRITICAL();
 
     xEventGroupSetBits(dutB.flags, ppsReadyFlag);
+}
+
+static void refCheckTimeout_timerService(TimerHandle_t xTimer)
+{
+    taskENTER_CRITICAL();
+    {
+        if(refCheck.status == captured){
+            refCheck.status = missingRef;
+        }
+    }
+    taskEXIT_CRITICAL();
+
+    xEventGroupSetBits(refCheck.flags, ppsReadyFlag);
 }
 
 static bool checkRef(int64_t* skew, const Dut* dut)
@@ -352,21 +463,32 @@ void skewMeasInit(void)
     dutA.port = usb;
     dutB.status = waiting;
     dutB.port = dutB_toPC;
+    refCheck.status = waiting;
+    refCheck.port = usb;
     ref.availableForDutA = false;
     ref.availableForDutB = false;
+    ref.availableForRefCheck = false;
     overflowCount = 0;
     dRefDut_clk = (((int64_t)SystemCoreClock) / ((int64_t)1000)) * D_REF_DUT_MS;
     //dPpsMessage_clk = (((int64_t)SystemCoreClock) / ((int64_t)1000)) * D_PPS_MESSAGE_MS;
 
     dutA.flags = xEventGroupCreate();
     xEventGroupClearBits(dutA.flags, ppsReadyFlag);
+
     dutB.flags = xEventGroupCreate();
     xEventGroupClearBits(dutB.flags, ppsReadyFlag);
+
+    refCheck.flags = xEventGroupCreate();
+    xEventGroupClearBits(refCheck.flags, ppsReadyFlag);
 
     //enable the IO port for the input capture legs
     if(!SysCtlPeripheralReady(SYSCTL_PERIPH_GPIOM)) {
         SysCtlPeripheralEnable(SYSCTL_PERIPH_GPIOM);
         while(!SysCtlPeripheralReady(SYSCTL_PERIPH_GPIOM)){}
+    }
+    if(!SysCtlPeripheralReady(SYSCTL_PERIPH_GPIOA)) {
+        SysCtlPeripheralEnable(SYSCTL_PERIPH_GPIOA);
+        while(!SysCtlPeripheralReady(SYSCTL_PERIPH_GPIOA)){}
     }
 
     //enables TIMER 0, which needs to be enabled in order to make GPTMSYNC accessible
@@ -394,37 +516,56 @@ void skewMeasInit(void)
     GPIOPinConfigure(GPIO_PM0_T2CCP0);   //sets PM0 as the input capture input for TIMER2 TIMER A
     GPIOPinConfigure(GPIO_PM1_T2CCP1);   //sets PM1 as the input capture input for TIMER2 TIMER B
     GPIOPinConfigure(GPIO_PM2_T3CCP0);   //sets PM2 as the input capture input for TIMER3 TIMER A
-    GPIOPinTypeTimer(GPIO_PORTM_BASE, GPIO_PIN_0 | GPIO_PIN_1 | GPIO_PIN_2); //configures the pins
+    GPIOPinConfigure(GPIO_PA7_T3CCP1);   //sets PA7 as the input capture input for TIMER3 TIMER B
+
+    //configures the pins
+    GPIOPinTypeTimer(GPIO_PORTM_BASE, GPIO_PIN_0 | GPIO_PIN_1 | GPIO_PIN_2);
+    GPIOPinTypeTimer(GPIO_PORTA_BASE, GPIO_PIN_7);
+
     TimerClockSourceSet(TIMER0_BASE, TIMER_CLOCK_SYSTEM);  //TIMER0 is clocked from the system clock
     TimerClockSourceSet(TIMER2_BASE, TIMER_CLOCK_SYSTEM);  //TIMER2 is clocked from the system clock
     TimerClockSourceSet(TIMER3_BASE, TIMER_CLOCK_SYSTEM);  //TIMER3 is clocked from the system clock
+
     TimerConfigure(TIMER0_BASE, (TIMER_CFG_SPLIT_PAIR | TIMER_CFG_A_PERIODIC_UP)); //configures TIMER0
     TimerConfigure(TIMER2_BASE, (TIMER_CFG_SPLIT_PAIR | TIMER_CFG_A_CAP_TIME_UP | TIMER_CFG_B_CAP_TIME_UP)); //configures TIMER2 TIMER A/B
-    TimerConfigure(TIMER3_BASE, (TIMER_CFG_SPLIT_PAIR | TIMER_CFG_A_CAP_TIME_UP)); //configures TIMER3 TIMER A
+    TimerConfigure(TIMER3_BASE, (TIMER_CFG_SPLIT_PAIR | TIMER_CFG_A_CAP_TIME_UP | TIMER_CFG_B_CAP_TIME_UP)); //configures TIMER3 TIMER A/B
+
     TimerControlEvent(TIMER2_BASE, TIMER_A, TIMER_EVENT_POS_EDGE);   //configures Timer2 A to capture rising edges
     TimerControlEvent(TIMER2_BASE, TIMER_B, TIMER_EVENT_POS_EDGE);   //configures Timer2 B to capture rising edges
     TimerControlEvent(TIMER3_BASE, TIMER_A, TIMER_EVENT_POS_EDGE);   //configures Timer3 A to capture rising edges
+    TimerControlEvent(TIMER3_BASE, TIMER_B, TIMER_EVENT_POS_EDGE);   //configures Timer3 A to capture rising edges
+
     TimerIntEnable(TIMER0_BASE, TIMER_TIMA_TIMEOUT); //enables overflow interrupt on TIMER0 A
     TimerIntEnable(TIMER2_BASE, (TIMER_CAPB_EVENT | TIMER_CAPA_EVENT));   //enables interrupt for edge capture on TIMER2 TIMER A/B
-    TimerIntEnable(TIMER3_BASE, TIMER_CAPA_EVENT);   //enables interrupt for edge capture on TIMER3 TIMER A
+    TimerIntEnable(TIMER3_BASE, (TIMER_CAPB_EVENT | TIMER_CAPA_EVENT));   //enables interrupt for edge capture on TIMER3 TIMER A/B
+
     TimerLoadSet(TIMER0_BASE, TIMER_A, 0xFFFF); //sets the max value of the counter
     TimerPrescaleSet(TIMER0_BASE, TIMER_A, 0xFF); //sets the max value of the prescaler
     TimerLoadSet(TIMER2_BASE, TIMER_BOTH, 0xFFFF);
     TimerPrescaleSet(TIMER2_BASE, TIMER_BOTH, 0xFF);
-    TimerLoadSet(TIMER3_BASE, TIMER_A, 0xFFFF);
-    TimerPrescaleSet(TIMER3_BASE, TIMER_A, 0xFF);
+    TimerLoadSet(TIMER3_BASE, TIMER_BOTH, 0xFFFF);
+    TimerPrescaleSet(TIMER3_BASE, TIMER_BOTH, 0xFF);
+
     TimerEnable(TIMER2_BASE, TIMER_BOTH);
     TimerEnable(TIMER0_BASE, TIMER_A);
-    TimerEnable(TIMER3_BASE, TIMER_A);
-    TimerSynchronize(TIMER0_BASE, (TIMER_0A_SYNC | TIMER_2A_SYNC | TIMER_2B_SYNC | TIMER_3A_SYNC));  //Synchronizes TIMER0 A and TIMER2 A and B and TIMER3 A with each other
+    TimerEnable(TIMER3_BASE, TIMER_BOTH);
+
+    TimerSynchronize(TIMER0_BASE, (TIMER_0A_SYNC | TIMER_2A_SYNC | TIMER_2B_SYNC | TIMER_3A_SYNC | TIMER_3B_SYNC));  //Synchronizes TIMER0 A and TIMER2 A and B and TIMER3 A and B with each other
+
     IntEnable(INT_TIMER0A);
     IntPrioritySet(INT_TIMER0A, OVERFLOW_INTERRUPT_PRIORITY << (8 - configPRIO_BITS)); //the priority bits need to be shifted up, to the implemented bits
+
     IntEnable(INT_TIMER2A);
     IntPrioritySet(INT_TIMER2A, PPS_INTERRUPT_PRIORITY << (8 - configPRIO_BITS));
+
     IntEnable(INT_TIMER2B);
     IntPrioritySet(INT_TIMER2B, PPS_INTERRUPT_PRIORITY << (8 - configPRIO_BITS));
+
     IntEnable(INT_TIMER3A);
     IntPrioritySet(INT_TIMER3A, PPS_INTERRUPT_PRIORITY << (8 - configPRIO_BITS));
+
+    IntEnable(INT_TIMER3B);
+    IntPrioritySet(INT_TIMER3B, PPS_INTERRUPT_PRIORITY << (8 - configPRIO_BITS));
 
 
     xTaskCreate(&err_task,
@@ -435,36 +576,53 @@ void skewMeasInit(void)
                 &errTaskHandle);
 
     dutAtimeoutTimerHandle = xTimerCreate("dutAtimeoutTimer",
-                                      pdMS_TO_TICKS(D_REF_DUT_MS),
-                                      pdFALSE,
-                                      (void*) 0,
-                                      &dutAtimeout_timerService);
+                                          pdMS_TO_TICKS(D_REF_DUT_MS),
+                                          pdFALSE,
+                                          (void*) 0,
+                                          &dutAtimeout_timerService);
 
     dutBtimeoutTimerHandle = xTimerCreate("dutBtimeoutTimer",
-                                      pdMS_TO_TICKS(D_REF_DUT_MS),
-                                      pdFALSE,
-                                      (void*) 0,
-                                      &dutBtimeout_timerService);
+                                          pdMS_TO_TICKS(D_REF_DUT_MS),
+                                          pdFALSE,
+                                          (void*) 0,
+                                          &dutBtimeout_timerService);
+
+    refCheckTimeoutTimerHandle = xTimerCreate("refCheckTimeoutTimer",
+                                              pdMS_TO_TICKS(D_REF_DUT_MS),
+                                              pdFALSE,
+                                              (void*) 0,
+                                              &refCheckTimeout_timerService);
 
     /******    UART    ******/
     uartSetRxCallback(dutA_toDut, &dutARx_callback);
     uartSetRxCallback(dutB_toDut, &dutBRx_callback);
+
+
+    xTaskCreate(&refCheck_task,
+                "refCheckTask",
+                512,
+                NULL, //parameter to task
+                3, //priority (same as for the dut Rx tasks)
+                &refCheckTaskHandle);
 }
 
 static void err_task(void* pvParameters)
 {
     while(true){
-        uint32_t dutNum; //A:1 B:2
+        uint32_t dutNum; //A:1 B:2 check:3
         xTaskNotifyWait(0,
                         UINT32_MAX,
                         &dutNum,
                         portMAX_DELAY);
 
         if(1 == dutNum){
-            uartPrintLn(dutA.port,"$EXTRAREF*0B");
+            uartPrintLn(dutA.port,"$EXTRAREF,dutA*03");
         }
         else if(2 == dutNum){
-            uartPrintLn(dutB.port,"$EXTRAREF*0B");
+            uartPrintLn(dutB.port,"$EXTRAREF,dutB*00");
+        }
+        else if(3 == dutNum){
+            uartPrintLn(refCheck.port,"$EXTRAREF,refCheck*10");
         }
     }
 }
@@ -482,6 +640,62 @@ static SkewStatus getSkew(float* D, float* skew_ns, const Dut* dut);
 static const char* printSkew(const Dut* dut); //with the new line at the end
 static const char* printSenMeas();
 static void streamProcessor(char* str, char buff[], size_t buffTotLength, const Dut* dut);
+
+static void refCheck_task(void* pvParams)
+{
+    while(true){
+        ulTaskNotifyTake(pdTRUE, portMAX_DELAY); //wait for a REF PPS to arrive
+
+        vTaskDelay(pdMS_TO_TICKS(100)); //wait 100 ms, so that the ref check can surly arrive and to simulate the triggering by the NMEA stream
+
+
+        float D, skew_ns;
+        SkewStatus skewStatus = getSkew(&D, &skew_ns, &refCheck);
+
+        static char str[100];
+
+        strcpy(str, "$REFCHECK,");
+
+        switch(skewStatus){
+            case skewOK:
+                if(fabsf(skew_ns) < 1.0e9f){ //if the skew is smaller than 1s
+                    appendFloat(str, D, 2, 10, true);
+                    strcat(str, "ms,");
+                    appendFloat(str, skew_ns, 2, 20, true);
+                    strcat(str, "ns,OK");
+                }
+                else{ //this shouldn't be possible, due to how the program is written
+                    appendFloat(str, D, 2, 10, true);
+                    strcat(str, "ms,");
+                    strcat(str, "inf,ns,???");
+                }
+                break;
+
+            case ppsGlitch:
+                appendFloat(str, D, 2, 10, true);
+                strcat(str, "ms,NaN,ns,GLITCH");
+                break;
+
+            case ppsOld:
+                appendFloat(str, D, 2, 10, true);
+                strcat(str, "ms,NaN,ns,OLD");
+                break;
+
+            case ppsMissing:
+                strcat(str, "NaN,ms,NaN,ns,CHECK_MISSING");
+                break;
+
+            case refMissing:
+                appendFloat(str, D, 2, 10, true);
+                strcat(str, "ms,NaN,ns,REF_MISSING");
+                break;
+        }
+
+        addChecksum(str, 99, true, false, true);
+
+        uartPrint(refCheck.port, str);
+    }
+}
 
 static const char pattern1[] = "$GNRMC";
 static const size_t pattern1Length = (sizeof(pattern1) / sizeof(char)) - 1;
