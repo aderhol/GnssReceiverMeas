@@ -131,6 +131,8 @@ bool appendFloat(char* str, float val, size_t precision, size_t maxLength, bool 
                 head[i++] = '0';
             }
 
+            head[i] = '\0';
+
             return true;
         }
 
