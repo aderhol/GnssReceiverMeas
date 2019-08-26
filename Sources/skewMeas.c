@@ -60,6 +60,7 @@ typedef struct{
 }Dut;
 
 static volatile Dut dutA, dutB, refCheck;
+static volatile int64_t refCheck_refAbsTime_ticks;
 
 static volatile struct{
     int64_t time;
@@ -203,6 +204,7 @@ void ISR_TIMER2_A(void)
         int64_t skew;
         if(checkRef(&skew, &refCheck)){ //if the new ref can be paired to the pending ref check
             refCheck.skew = skew; //update the skew of the ref check
+            refCheck_refAbsTime_ticks = ref.time; //save the refs absolute time
             refCheck.status = available; //the ref check is now available
 
             ref.availableForRefCheck = false; //the ref has been used up / paired
@@ -355,6 +357,7 @@ void ISR_TIMER3_B(void)
             int64_t skew;
             if(checkRef(&skew, &refCheck)){ //if the new ref can be paired to the new ref check
                 refCheck.skew = skew; //update the skew of the ref check
+                refCheck_refAbsTime_ticks = ref.time; //save the refs absolute time
                 refCheck.status = available; //the ref check is now available
             }
             else{ //if the new ref check doesn't belong to the ref on record
@@ -486,9 +489,9 @@ void skewMeasInit(void)
         SysCtlPeripheralEnable(SYSCTL_PERIPH_GPIOM);
         while(!SysCtlPeripheralReady(SYSCTL_PERIPH_GPIOM)){}
     }
-    if(!SysCtlPeripheralReady(SYSCTL_PERIPH_GPIOA)) {
-        SysCtlPeripheralEnable(SYSCTL_PERIPH_GPIOA);
-        while(!SysCtlPeripheralReady(SYSCTL_PERIPH_GPIOA)){}
+    if(!SysCtlPeripheralReady(SYSCTL_PERIPH_GPIOD)) {
+        SysCtlPeripheralEnable(SYSCTL_PERIPH_GPIOD);
+        while(!SysCtlPeripheralReady(SYSCTL_PERIPH_GPIOD)){}
     }
 
     //enables TIMER 0, which needs to be enabled in order to make GPTMSYNC accessible
@@ -511,16 +514,19 @@ void skewMeasInit(void)
         SysCtlPeripheralEnable(SYSCTL_PERIPH_TIMER3);
         while(!SysCtlPeripheralReady(SYSCTL_PERIPH_TIMER3)){}
     }
-
     //configures timers for two-signal edge-separation
     GPIOPinConfigure(GPIO_PM0_T2CCP0);   //sets PM0 as the input capture input for TIMER2 TIMER A
     GPIOPinConfigure(GPIO_PM1_T2CCP1);   //sets PM1 as the input capture input for TIMER2 TIMER B
     GPIOPinConfigure(GPIO_PM2_T3CCP0);   //sets PM2 as the input capture input for TIMER3 TIMER A
-    GPIOPinConfigure(GPIO_PA7_T3CCP1);   //sets PA7 as the input capture input for TIMER3 TIMER B
+    GPIOPinConfigure(GPIO_PD5_T3CCP1);   //sets PD5 as the input capture input for TIMER3 TIMER B
 
     //configures the pins
     GPIOPinTypeTimer(GPIO_PORTM_BASE, GPIO_PIN_0 | GPIO_PIN_1 | GPIO_PIN_2);
-    GPIOPinTypeTimer(GPIO_PORTA_BASE, GPIO_PIN_7);
+    GPIOPinTypeTimer(GPIO_PORTD_BASE, GPIO_PIN_5);
+    /*GPIOPadConfigSet(GPIO_PORTD_BASE,
+                     GPIO_PIN_5,
+                     GPIO_STRENGTH_2MA,
+                     GPIO_PIN_TYPE_STD_WPU);*/
 
     TimerClockSourceSet(TIMER0_BASE, TIMER_CLOCK_SYSTEM);  //TIMER0 is clocked from the system clock
     TimerClockSourceSet(TIMER2_BASE, TIMER_CLOCK_SYSTEM);  //TIMER2 is clocked from the system clock
@@ -636,7 +642,7 @@ typedef enum{
     refMissing
 }SkewStatus;
 
-static SkewStatus getSkew(float* D, float* skew_ns, const Dut* dut);
+static SkewStatus getSkew(float* D, float* skew_ns, int64_t* absTime_ticks, const Dut* dut);
 static const char* printSkew(const Dut* dut); //with the new line at the end
 static const char* printSenMeas();
 static void streamProcessor(char* str, char buff[], size_t buffTotLength, const Dut* dut);
@@ -646,11 +652,17 @@ static void refCheck_task(void* pvParams)
     while(true){
         ulTaskNotifyTake(pdTRUE, portMAX_DELAY); //wait for a REF PPS to arrive
 
-        vTaskDelay(pdMS_TO_TICKS(100)); //wait 100 ms, so that the ref check can surly arrive and to simulate the triggering by the NMEA stream
+        vTaskDelay(pdMS_TO_TICKS(100)); //wait 100 ms, so that the ref check can surely arrive and to simulate the triggering by the NMEA stream
 
 
         float D, skew_ns;
-        SkewStatus skewStatus = getSkew(&D, &skew_ns, &refCheck);
+        int64_t absTime_ticks, refAbsTime_ticks;
+        SkewStatus skewStatus = getSkew(&D, &skew_ns, &absTime_ticks, &refCheck);
+        taskENTER_CRITICAL();
+        {
+            refAbsTime_ticks = refCheck_refAbsTime_ticks;
+        }
+        taskEXIT_CRITICAL();
 
         static char str[100];
 
@@ -662,32 +674,48 @@ static void refCheck_task(void* pvParams)
                     appendFloat(str, D, 2, 10, true);
                     strcat(str, "ms,");
                     appendFloat(str, skew_ns, 2, 20, true);
-                    strcat(str, "ns,OK");
+                    strcat(str, "ns,");
+                    appendInt64(str, refAbsTime_ticks, 20, true);
+                    strcat(str, "ticks,");
+                    appendInt64(str, absTime_ticks, 20, true);
+                    strcat(str, "ticks,OK");
                 }
                 else{ //this shouldn't be possible, due to how the program is written
                     appendFloat(str, D, 2, 10, true);
                     strcat(str, "ms,");
-                    strcat(str, "inf,ns,???");
+                    strcat(str, "inf,ns,");
+                    appendInt64(str, refAbsTime_ticks, 20, true);
+                    strcat(str, "ticks,");
+                    appendInt64(str, absTime_ticks, 20, true);
+                    strcat(str, "ticks,???");
                 }
                 break;
 
             case ppsGlitch:
                 appendFloat(str, D, 2, 10, true);
-                strcat(str, "ms,NaN,ns,GLITCH");
+                strcat(str, "ms,NaN,ns,,ticks,,ticks,GLITCH");
                 break;
 
             case ppsOld:
                 appendFloat(str, D, 2, 10, true);
-                strcat(str, "ms,NaN,ns,OLD");
+                strcat(str, "ms,NaN,ns,");
+                appendInt64(str, refAbsTime_ticks, 20, true);
+                strcat(str, "ticks,");
+                appendInt64(str, absTime_ticks, 20, true);
+                strcat(str, "ticks,OLD");
                 break;
 
             case ppsMissing:
-                strcat(str, "NaN,ms,NaN,ns,CHECK_MISSING");
+                strcat(str, "NaN,ms,NaN,ns,");
+                appendInt64(str, refAbsTime_ticks, 20, true);
+                strcat(str, "ticks,,ticks,CHECK_MISSING");
                 break;
 
             case refMissing:
                 appendFloat(str, D, 2, 10, true);
-                strcat(str, "ms,NaN,ns,REF_MISSING");
+                strcat(str, "ms,NaN,ns,,ticks,");
+                appendInt64(str, absTime_ticks, 20, true);
+                strcat(str, "ticks,REF_MISSING");
                 break;
         }
 
@@ -832,7 +860,8 @@ static const char* printSenMeas()
 static const char* printSkew(const Dut* dut)
 {
     float D, skew_ns;
-    SkewStatus skewStatus = getSkew(&D, &skew_ns, dut);
+    int64_t absTime_ticks;
+    SkewStatus skewStatus = getSkew(&D, &skew_ns, &absTime_ticks, dut);
 
     static char str[100];
 
@@ -844,32 +873,40 @@ static const char* printSkew(const Dut* dut)
                 appendFloat(str, D, 2, 10, true);
                 strcat(str, "ms,");
                 appendFloat(str, skew_ns, 2, 20, true);
-                strcat(str, "ns,OK");
+                strcat(str, "ns,");
+                appendInt64(str, absTime_ticks, 20, true);
+                strcat(str, "ticks,OK");
             }
             else{ //this shouldn't be possible, due to how the program is written
                 appendFloat(str, D, 2, 10, true);
                 strcat(str, "ms,");
-                strcat(str, "inf,ns,???");
+                strcat(str, "inf,ns,");
+                appendInt64(str, absTime_ticks, 20, true);
+                strcat(str, "ticks,???");
             }
             break;
 
         case ppsGlitch:
             appendFloat(str, D, 2, 10, true);
-            strcat(str, "ms,NaN,ns,GLITCH");
+            strcat(str, "ms,NaN,ns,,ticks,GLITCH");
             break;
 
         case ppsOld:
             appendFloat(str, D, 2, 10, true);
-            strcat(str, "ms,NaN,ns,OLD");
+            strcat(str, "ms,NaN,ns,");
+            appendInt64(str, absTime_ticks, 20, true);
+            strcat(str, "ticks,OLD");
             break;
 
         case ppsMissing:
-            strcat(str, "NaN,ms,NaN,ns,PPS_MISSING");
+            strcat(str, "NaN,ms,NaN,ns,,ticks,PPS_MISSING");
             break;
 
         case refMissing:
             appendFloat(str, D, 2, 10, true);
-            strcat(str, "ms,NaN,ns,REF_MISSING");
+            strcat(str, "ms,NaN,ns,");
+            appendInt64(str, absTime_ticks, 20, true);
+            strcat(str, "ticks,REF_MISSING");
             break;
     }
 
@@ -878,7 +915,7 @@ static const char* printSkew(const Dut* dut)
     return str;
 }
 
-static SkewStatus getSkew(float* D, float* skew_ns, const Dut* dut)
+static SkewStatus getSkew(float* D, float* skew_ns, int64_t* absTime_ticks, const Dut* dut)
 {
     TickType_t invocTime = xTaskGetTickCount();
 
@@ -900,6 +937,8 @@ static SkewStatus getSkew(float* D, float* skew_ns, const Dut* dut)
     SkewStatus skewStatus;
 
     if(dutPps.status != waiting){ //if a PPS was captured
+        *absTime_ticks = dutPps.time;
+
         float d = calcTimeDiff_ms(dutPps.sysTime, invocTime); //calculate the delay
 
         *D = d;
