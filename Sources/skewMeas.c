@@ -643,8 +643,8 @@ typedef enum{
 }SkewStatus;
 
 static SkewStatus getSkew(float* D, float* skew_ns, int64_t* absTime_ticks, const Dut* dut);
-static const char* printSkew(const Dut* dut); //with the new line at the end
-static const char* printSenMeas();
+static const char* printSkew(const Dut* dut, char* str); //with the new line at the end
+static const char* printSenMeas(char* str);
 static void streamProcessor(char* str, char buff[], size_t buffTotLength, const Dut* dut);
 
 static void refCheck_task(void* pvParams)
@@ -795,8 +795,9 @@ static void streamProcessor(char* str, char buff[], size_t buffTotLength, const 
                     }
 
                     if(trigger){ //if the start of an NMEA block was detected
-                        uartPrint(dut->port, printSkew(dut)); //sends the skew
-                        uartPrint(dut->port, printSenMeas()); //sends the skew
+                        char str[300];
+                        uartPrint(dut->port, printSkew(dut, str)); //sends the skew
+                        uartPrint(dut->port, printSenMeas(str)); //sends the skew
                     }
 
                     head = pos + 1;//move the head to the beginning of the next message
@@ -808,12 +809,11 @@ static void streamProcessor(char* str, char buff[], size_t buffTotLength, const 
     }
 }
 
-
-static const char* printSenMeas()
+//str needs to be at least 300 long
+static const char* printSenMeas(char* str)
 {
     SensorData sensorData;
     bool OK;
-    static char str[300];
 
     strcpy(str, "$SENDAT,"); //Initializing str
 
@@ -857,13 +857,12 @@ static const char* printSenMeas()
     return str;
 }
 
-static const char* printSkew(const Dut* dut)
+//str needs to be at least 100 long
+static const char* printSkew(const Dut* dut, char* str)
 {
     float D, skew_ns;
     int64_t absTime_ticks;
     SkewStatus skewStatus = getSkew(&D, &skew_ns, &absTime_ticks, dut);
-
-    static char str[100];
 
     strcpy(str, "$SKEW,");
 
