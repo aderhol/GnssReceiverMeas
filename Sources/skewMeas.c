@@ -60,6 +60,10 @@ typedef struct{
 }Dut;
 
 static volatile Dut dutA, dutB, refCheck;
+
+
+#define NUMBER_OF_DUT_PORTS (2)
+static UartPort dutPorts[NUMBER_OF_DUT_PORTS];
 static volatile int64_t refCheck_refAbsTime_ticks;
 
 static volatile struct{
@@ -467,7 +471,10 @@ void skewMeasInit(void)
     dutB.status = waiting;
     dutB.port = dutB_toPC;
     refCheck.status = waiting;
-    refCheck.port = usb;
+
+    dutPorts[0] = dutA.port;
+    dutPorts[1] = dutB.port;
+
     ref.availableForDutA = false;
     ref.availableForDutB = false;
     ref.availableForRefCheck = false;
@@ -628,7 +635,10 @@ static void err_task(void* pvParameters)
             uartPrintLn(dutB.port,"$EXTRAREF,dutB*00");
         }
         else if(3 == dutNum){
-            uartPrintLn(refCheck.port,"$EXTRAREF,refCheck*10");
+            size_t i;
+            for(i = 0; i < NUMBER_OF_DUT_PORTS; i++){
+                uartPrintLn(dutPorts[i],"$EXTRAREF,refCheck*10");
+            }
         }
     }
 }
@@ -651,6 +661,9 @@ static void refCheck_task(void* pvParams)
 {
     while(true){
         ulTaskNotifyTake(pdTRUE, portMAX_DELAY); //wait for a REF PPS to arrive
+        char refTimeMess[100] = "$REFTIME,";
+        appendInt64(refTimeMess, ref.time, 20, true);
+        strcat(refTimeMess, "ticks");
 
         vTaskDelay(pdMS_TO_TICKS(100)); //wait 100 ms, so that the ref check can surely arrive and to simulate the triggering by the NMEA stream
 
@@ -706,9 +719,7 @@ static void refCheck_task(void* pvParams)
                 break;
 
             case ppsMissing:
-                strcat(str, "NaN,ms,NaN,ns,");
-                appendInt64(str, refAbsTime_ticks, 20, true);
-                strcat(str, "ticks,,ticks,CHECK_MISSING");
+                strcat(str, "NaN,ms,NaN,ns,,ticks,,ticks,CHECK_MISSING");
                 break;
 
             case refMissing:
@@ -719,9 +730,14 @@ static void refCheck_task(void* pvParams)
                 break;
         }
 
+        addChecksum(refTimeMess, 99, true, false, true);
         addChecksum(str, 99, true, false, true);
 
-        uartPrint(refCheck.port, str);
+        size_t i;
+        for(i = 0; i < NUMBER_OF_DUT_PORTS; i++){
+            uartPrint(dutPorts[i], refTimeMess);
+            uartPrint(dutPorts[i], str);
+        }
     }
 }
 
