@@ -18,7 +18,10 @@ typedef void (*UartRx_Callback)(char*);
 void uartPrint(UartPort port, const char string[]); //send a character string to the specified port, the string is guaranteed to be sent as a whole
 void uartPrintLn(UartPort port, const char string[]); //same as uartPrint, just appends a new line
 void uartPrintLf(UartPort port, const char string[]); //same as uartPrintLn, but appends only the \n
+void uartSend(UartPort port, const char dat[], size_t length); //sends the char array (dat) to the port
 
 void uartSetRxCallback(UartPort port, UartRx_Callback callback); //sets the Rx callback function, not thread safe
+
+void uartReconfig(UartPort uartPort, uint32_t baud); //reconfigures an uart port
 
 #endif /* INC_UARTIO_H_ */

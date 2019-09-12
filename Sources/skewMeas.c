@@ -9,6 +9,7 @@
 #include <FreeRTOS.h>
 #include <task.h>
 #include <event_groups.h>
+#include <semphr.h>
 
 //driver includes
 #include "inc/hw_memmap.h"
@@ -463,6 +464,8 @@ static bool checkRef(int64_t* skew, const Dut* dut)
 
 extern uint32_t SystemCoreClock; //actual system core clock frequency in Hz (built-in to FreeRTOS)
 
+static void init_skewMeas_task(void* pvParameters);
+
 void skewMeasInit(void)
 {
     //initializes the global variables
@@ -565,19 +568,19 @@ void skewMeasInit(void)
 
     TimerSynchronize(TIMER0_BASE, (TIMER_0A_SYNC | TIMER_2A_SYNC | TIMER_2B_SYNC | TIMER_3A_SYNC | TIMER_3B_SYNC));  //Synchronizes TIMER0 A and TIMER2 A and B and TIMER3 A and B with each other
 
-    IntEnable(INT_TIMER0A);
+    //IntEnable(INT_TIMER0A);
     IntPrioritySet(INT_TIMER0A, OVERFLOW_INTERRUPT_PRIORITY << (8 - configPRIO_BITS)); //the priority bits need to be shifted up, to the implemented bits
 
-    IntEnable(INT_TIMER2A);
+    //IntEnable(INT_TIMER2A);
     IntPrioritySet(INT_TIMER2A, PPS_INTERRUPT_PRIORITY << (8 - configPRIO_BITS));
 
-    IntEnable(INT_TIMER2B);
+    //IntEnable(INT_TIMER2B);
     IntPrioritySet(INT_TIMER2B, PPS_INTERRUPT_PRIORITY << (8 - configPRIO_BITS));
 
-    IntEnable(INT_TIMER3A);
+    //IntEnable(INT_TIMER3A);
     IntPrioritySet(INT_TIMER3A, PPS_INTERRUPT_PRIORITY << (8 - configPRIO_BITS));
 
-    IntEnable(INT_TIMER3B);
+    //IntEnable(INT_TIMER3B);
     IntPrioritySet(INT_TIMER3B, PPS_INTERRUPT_PRIORITY << (8 - configPRIO_BITS));
 
 
@@ -607,8 +610,8 @@ void skewMeasInit(void)
                                               &refCheckTimeout_timerService);
 
     /******    UART    ******/
-    uartSetRxCallback(dutA_toDut, &dutARx_callback);
-    uartSetRxCallback(dutB_toDut, &dutBRx_callback);
+    //uartSetRxCallback(dutA_toDut, &dutARx_callback);
+    //uartSetRxCallback(dutB_toDut, &dutBRx_callback);
 
 
     xTaskCreate(&refCheck_task,
@@ -617,6 +620,385 @@ void skewMeasInit(void)
                 NULL, //parameter to task
                 3, //priority (same as for the dut Rx tasks)
                 &refCheckTaskHandle);
+
+    TaskHandle_t initSkewMeasTaskHandle;
+    xTaskCreate(&init_skewMeas_task,
+                "initSkewMeasTask",
+                512,
+                NULL, //parameter to task
+                (configMAX_PRIORITIES - 1), //maximum prioroty
+                &initSkewMeasTaskHandle);
+}
+
+typedef enum{
+    UBlox,
+    L86
+}ReceiverType;
+
+static volatile ReceiverType dutA_type, dutB_type;
+
+static void dutARx_callback_init(char*);
+static void dutBRx_callback_init(char*);
+
+static volatile SemaphoreHandle_t dutA_init_sem;
+static volatile SemaphoreHandle_t dutB_init_sem;
+
+static void init_skewMeas_task(void* pvParameters)
+{
+    dutA_init_sem = xSemaphoreCreateBinary();
+    dutB_init_sem = xSemaphoreCreateBinary();
+
+    uartSetRxCallback(dutA_toDut, &dutARx_callback_init);
+    uartSetRxCallback(dutB_toDut, &dutBRx_callback_init);
+
+    bool OK;
+
+
+    char ubxMess[] = {0xB5, 0x62,   //sync chars
+                      0x06,         //class
+                      0x31,         //ID
+                      0x20, 0x00,   //length
+
+                      //payload
+                      0x00,                     //tpIdx: Time pulse selection (0 = TIMEPULSE, 1 = TIMEPULSE2)
+                      0x01,                     //version
+                      0x00,                     //reserved1
+                      0x00,                     //reserved2
+                      0x00, 0x00,               //antCableDelay (0 ns)
+                      0x00, 0x00,               //rfGroupDelay
+                      0x40, 0x42, 0x0F, 0x00,   //freqPeriod (1'000'000 us)
+                      0x40, 0x42, 0x0F, 0x00,   //freqPeriodLock (1'000'000 us)
+                      0x00, 0x00, 0x00, 0x00,   //pulseLenRatio (0 us)
+                      0xA0, 0x86, 0x01, 0x00,   //pulseLenRatioLock (100'000 us)
+                      0x00, 0x00, 0x00, 0x00,   //userConfigDelay (0 ns)
+                      0xF7, 0x00, 0x00, 0x00,   //flags
+
+                      0x00, 0x00};  //checksum
+
+    const size_t ubxMessLength = (sizeof(ubxMess) / sizeof(char));
+
+    uint8_t CK_A = 0, CK_B = 0;
+    size_t i;
+    for(i = 2; i < (ubxMessLength - 2); i++){
+        CK_A = CK_A + ubxMess[i];
+        CK_B = CK_B + CK_A;
+    }
+
+    ubxMess[ubxMessLength - 2] = CK_A;
+    ubxMess[ubxMessLength - 1] = CK_B;
+
+    OK = (pdTRUE == xSemaphoreTake(dutA_init_sem, pdMS_TO_TICKS(3000))); //get the receiver's type
+    if(OK){ //if the current baud rate is the default baud rate (9600)
+        switch(dutA_type){
+            case L86:
+                uartPrintLn(dutA_toDut, "$PMTK251,115200*1F"); //sets the receiver's baud rate to 115200
+                uartReconfig(dutA_toDut, 115200); //modifies the port's baud rate to 115200
+                uartPrintLn(dutA_toDut, "$PMTK255,1*2D"); //makes the receiver sync the NMEA block with the PPS
+                break;
+
+            case UBlox:
+                uartPrintLn(dutA_toDut, "$PUBX,41,1,0007,0003,115200,0*18"); //sets the receiver's baud rate to 115200
+                uartReconfig(dutA_toDut, 115200); //modifies the port's baud rate to 115200
+
+                uartSend(dutA_toDut, ubxMess, ubxMessLength); //sets the receivers compensation for the antenna cable to 0 ns
+                break;
+
+            default:
+                while(true);
+                break;
+        }
+    }
+    else{ //if the current baud rate is the working baud rate (115200)
+        uartReconfig(dutA_toDut, 115200); //modifies the port's baud rate to 115200
+
+        OK = (pdTRUE == xSemaphoreTake(dutA_init_sem, pdMS_TO_TICKS(3000))); //get the receiver's type
+
+        if(!OK)
+        {
+            uartPrintLn(usb, "***** DUT-A config problem *****");
+            vTaskSuspend(xTaskGetCurrentTaskHandle()); //suspend task for ever
+        }
+
+        switch(dutA_type){
+            case L86:
+                uartPrintLn(dutA_toDut, "$PMTK255,1*2D"); //makes the receiver sync the NMEA block with the PPS
+                break;
+
+            case UBlox:
+                uartSend(dutA_toDut, ubxMess, ubxMessLength); //sets the receivers compensation for the antenna cable to 0 ns
+                break;
+
+            default:
+                while(true);
+                break;
+        }
+    }
+
+    OK = (pdTRUE == xSemaphoreTake(dutB_init_sem, pdMS_TO_TICKS(3000))); //get the receiver's type
+    if(OK){ //if the current baud rate is the default baud rate (9600)
+        switch(dutB_type){
+            case L86:
+                uartPrintLn(dutB_toDut, "$PMTK251,115200*1F"); //sets the receiver's baud rate to 115200
+                uartReconfig(dutB_toDut, 115200); //modifies the port's baud rate to 115200
+                uartPrintLn(dutB_toDut, "$PMTK255,1*2D"); //makes the receiver sync the NMEA block with the PPS
+                break;
+
+            case UBlox:
+                uartPrintLn(dutB_toDut, "$PUBX,41,1,0007,0003,115200,0*18"); //sets the receiver's baud rate to 115200
+                uartReconfig(dutB_toDut, 115200); //modifies the port's baud rate to 115200
+
+                uartSend(dutB_toDut, ubxMess, ubxMessLength); //sets the receivers compensation for the antenna cable to 0 ns
+                break;
+
+            default:
+                while(true);
+                break;
+        }
+    }
+    else{ //if the current baud rate is the working baud rate (115200)
+        uartReconfig(dutB_toDut, 115200); //modifies the port's baud rate to 115200
+
+        OK = (pdTRUE == xSemaphoreTake(dutB_init_sem, pdMS_TO_TICKS(3000))); //get the receiver's type
+
+        if(!OK)
+        {
+            uartPrintLn(usb, "***** DUT-B config problem *****");
+            vTaskSuspend(xTaskGetCurrentTaskHandle()); //suspend task for ever
+        }
+
+        switch(dutA_type){
+            case L86:
+                uartPrintLn(dutB_toDut, "$PMTK255,1*2D"); //makes the receiver sync the NMEA block with the PPS
+                break;
+
+            case UBlox:
+                uartSend(dutB_toDut, ubxMess, ubxMessLength); //sets the receivers compensation for the antenna cable to 0 ns
+                break;
+
+            default:
+                while(true);
+                break;
+        }
+    }
+
+    IntEnable(INT_TIMER0A);
+    IntEnable(INT_TIMER2A);
+    IntEnable(INT_TIMER2B);
+    IntEnable(INT_TIMER3A);
+    IntEnable(INT_TIMER3B);
+
+    uartSetRxCallback(dutA_toDut, &dutARx_callback);
+    uartSetRxCallback(dutB_toDut, &dutBRx_callback);
+
+    vTaskSuspend(xTaskGetCurrentTaskHandle()); //suspend task for ever
+}
+
+typedef enum{
+    L86Waiting,
+    T,
+    X,
+}L86AutoBaudState;
+
+typedef enum{
+    UbloxWaiting,
+    Z,
+    D
+}UBloxAutoBaudState;
+
+static void dutARx_callback_init(char* str)
+{
+    static bool OK = false;
+
+    if(OK)
+    {
+        return;
+    }
+
+    static L86AutoBaudState l86 = L86Waiting;
+    static UBloxAutoBaudState ublox = UbloxWaiting;
+
+    char ch;
+    while((ch = *(str++)) != '\0'){
+        switch (l86){
+            L86Waiting_case:
+            case L86Waiting:
+                if(ch == 'T')
+                {
+                    l86 = T;
+                }
+                break;
+
+            case T:
+                if(ch == 'X')
+                {
+                    l86 = X;
+                }
+                else
+                {
+                    l86 = L86Waiting;
+                    goto L86Waiting_case;
+                }
+                break;
+
+            case X:
+                if(ch == 'T')
+                {
+                    OK = true;
+                    dutA_type = L86;
+                    xSemaphoreGive(dutA_init_sem);
+                    return;
+                }
+                else
+                {
+                    l86 = L86Waiting;
+                    goto L86Waiting_case;
+                }
+                break;
+
+            default:
+                while(true);
+                break;
+        }
+
+        switch (ublox){
+            UbloxWaiting_case:
+            case UbloxWaiting:
+                if(ch == 'Z')
+                {
+                    ublox = Z;
+                }
+                break;
+
+            case Z:
+                if(ch == 'D')
+                {
+                    ublox = D;
+                }
+                else
+                {
+                    ublox = UbloxWaiting;
+                    goto UbloxWaiting_case;
+                }
+                break;
+
+            case D:
+                if(ch == 'A')
+                {
+                    OK = true;
+                    dutA_type = UBlox;
+                    xSemaphoreGive(dutA_init_sem);
+                    return;
+                }
+                else
+                {
+                    ublox = UbloxWaiting;
+                    goto UbloxWaiting_case;
+                }
+                break;
+
+            default:
+                while(true);
+                break;
+        }
+    }
+}
+
+static void dutBRx_callback_init(char* str)
+{
+    static bool OK = false;
+
+    if(OK)
+    {
+        return;
+    }
+
+    static L86AutoBaudState l86 = L86Waiting;
+    static UBloxAutoBaudState ublox = UbloxWaiting;
+
+    char ch;
+    while((ch = *(str++)) != '\0'){
+        switch (l86){
+            L86Waiting_case:
+            case L86Waiting:
+                if(ch == 'T')
+                {
+                    l86 = T;
+                }
+                break;
+
+            case T:
+                if(ch == 'X')
+                {
+                    l86 = X;
+                }
+                else
+                {
+                    l86 = L86Waiting;
+                    goto L86Waiting_case;
+                }
+                break;
+
+            case X:
+                if(ch == 'T')
+                {
+                    OK = true;
+                    dutB_type = L86;
+                    xSemaphoreGive(dutB_init_sem);
+                    return;
+                }
+                else
+                {
+                    l86 = L86Waiting;
+                    goto L86Waiting_case;
+                }
+                break;
+
+            default:
+                while(true);
+                break;
+        }
+
+        switch (ublox){
+            UbloxWaiting_case:
+            case UbloxWaiting:
+                if(ch == 'Z')
+                {
+                    ublox = Z;
+                }
+                break;
+
+            case Z:
+                if(ch == 'D')
+                {
+                    ublox = D;
+                }
+                else
+                {
+                    ublox = UbloxWaiting;
+                    goto UbloxWaiting_case;
+                }
+                break;
+
+            case D:
+                if(ch == 'A')
+                {
+                    OK = true;
+                    dutB_type = UBlox;
+                    xSemaphoreGive(dutB_init_sem);
+                    return;
+                }
+                else
+                {
+                    ublox = UbloxWaiting;
+                    goto UbloxWaiting_case;
+                }
+                break;
+
+            default:
+                while(true);
+                break;
+        }
+    }
 }
 
 static void err_task(void* pvParameters)

@@ -738,3 +738,74 @@ void uartSetRxCallback(UartPort port, UartRx_Callback callback)
     port_->Rx_callback = callback;
 }
 
+void uartSend(UartPort port, const char dat[], size_t length)
+{
+    const Port* port_ = getPort(port); //get the port
+
+    xSemaphoreTake(port_->Tx_mutex, portMAX_DELAY); //take the mutex, so that the data can be sent out continuously
+    {
+        if(uxQueueSpacesAvailable(port_->Tx_queue) >= length){ //if there is enough space in the queue
+            //send all characters to the queue
+            size_t i;
+            for(i = 0; i < length; i++){
+                uartPutch(port_, dat[i]);
+            }
+        }
+        else{
+            while(true){} //the buffer (queue) is not large enough
+        }
+    }
+    xSemaphoreGive(port_->Tx_mutex);
+}
+
+void uartReconfig(UartPort uartPort, uint32_t baud)
+{
+    Port* port;
+    uint32_t intNum;
+
+    switch(uartPort)
+    {
+        case 0:
+            port = &uart0;
+            intNum = INT_UART0;
+            break;
+
+        case 3:
+            port = &uart3;
+            intNum = INT_UART3;
+            break;
+
+        case 4:
+            port = &uart4;
+            intNum = INT_UART4;
+            break;
+
+        case 6:
+            port = &uart6;
+            intNum = INT_UART6;
+            break;
+
+        default:
+            while(true);
+            break;
+    }
+
+    xSemaphoreTake(port->Tx_mutex, portMAX_DELAY); //take the mutex, so that no further data can be sent to the port
+    {
+        //wait for the queue to empty
+        while(0 != uxQueueMessagesWaiting(port->Tx_queue)){
+            vTaskDelay(pdMS_TO_TICKS(100));
+        }
+
+        IntDisable(intNum); //disables the UART interrupt
+
+        //waits for the Tx hardware FIFO to empty
+        //configures the UART module
+        //UART: baud-rate: baud, 8-bit, 1 STOP-bit, no parity-bit
+        UARTConfigSetExpClk(port->base, SystemCoreClock, baud, ((uint32_t)UART_CONFIG_WLEN_8 | (uint32_t)UART_CONFIG_STOP_ONE | (uint32_t)UART_CONFIG_PAR_NONE));
+
+        IntEnable(intNum); //enables the UART interrupt
+    }
+    xSemaphoreGive(port->Tx_mutex);
+}
+
