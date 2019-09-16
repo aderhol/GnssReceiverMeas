@@ -648,6 +648,8 @@ static void init_skewMeas_task(void* pvParameters)
     dutA_init_sem = xSemaphoreCreateBinary();
     dutB_init_sem = xSemaphoreCreateBinary();
 
+    vTaskDelay(pdMS_TO_TICKS(1000)); //wait for the receivers to send all their power on messages (u-Blox sends $GPTXT at this time too, which breaks the receiver type identification algorithm)
+
     uartSetRxCallback(dutA_toDut, &dutARx_callback_init);
     uartSetRxCallback(dutB_toDut, &dutBRx_callback_init);
 
@@ -766,7 +768,7 @@ static void init_skewMeas_task(void* pvParameters)
             vTaskSuspend(xTaskGetCurrentTaskHandle()); //suspend task for ever
         }
 
-        switch(dutA_type){
+        switch(dutB_type){
             case L86:
                 uartPrintLn(dutB_toDut, "$PMTK255,1*2D"); //makes the receiver sync the NMEA block with the PPS
                 break;
@@ -780,6 +782,8 @@ static void init_skewMeas_task(void* pvParameters)
                 break;
         }
     }
+
+    vTaskDelay(300); //wait for the configurations to take effect
 
     IntEnable(INT_TIMER0A);
     IntEnable(INT_TIMER2A);
