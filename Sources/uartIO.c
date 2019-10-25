@@ -27,8 +27,8 @@
 //configurations
 static const uint8_t TX_PRIORITY = 1;
 static const uint8_t RX_PRIORITY = 1;
-static const uint16_t TX_QUEUE_LENGTH = 1024;
-static const uint16_t RX_STREAM_LENGTH = 1024;
+static const uint16_t TX_QUEUE_LENGTH = 4096;
+static const uint16_t RX_STREAM_LENGTH = 2048;
 static const uint8_t INTERRUPT_PRIORITY = 4;
 static const char newLine[] = "\r\n";
 #define UART_FIFO_LENGTH (16)

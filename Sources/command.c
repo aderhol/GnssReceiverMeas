@@ -43,10 +43,11 @@ void commandInit(void)
                 &interpreterTaskHandle);
 }
 
-
+extern size_t xPortGetFreeHeapSize( void );
 static void interpreter_task(void* pvParameters)
 {
     static char str[512];
+    static char msg[512]; //work buffer for string building
 
     while(true){
         bool OK = 0 != xMessageBufferReceive(commandBuffer,
@@ -76,6 +77,25 @@ static void interpreter_task(void* pvParameters)
                     const char usage[] = "Error: incorrect usage\r\n"
                             "\tUsage:\r\n"
                             "\t\tsitrep\r\n";
+                    uartPrint(usb, usage);
+                }
+            }
+            else if(strcmp_bool(command, "heaprem")){
+                if(NULL == strtok_r(NULL, delimStr, &work)){ //no other tokens
+                    size_t rem = xPortGetFreeHeapSize();
+
+                    msg[0] = '\0';
+
+                    strcat(msg, "There are ");
+                    appendInt64(msg, rem, 15, false);
+                    strcat(msg, " free bytes remaining in the heap.");
+
+                    uartPrintLn(usb, msg);
+                }
+                else{ //incorrect usage
+                    const char usage[] = "Error: incorrect usage\r\n"
+                            "\tUsage:\r\n"
+                            "\t\theaprem\r\n";
                     uartPrint(usb, usage);
                 }
             }

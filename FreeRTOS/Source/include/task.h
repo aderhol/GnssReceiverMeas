@@ -68,6 +68,11 @@ extern "C" {
  */
 struct tskTaskControlBlock; /* The old naming convention is used to prevent breaking kernel aware debuggers. */
 typedef struct tskTaskControlBlock* TaskHandle_t;
+/*MOD*/
+uint32_t taskGetRunTimeCount(TaskHandle_t task);
+void taskSetRunTimeCount(TaskHandle_t task, uint32_t cnt);
+void taskGetPriorities(TaskHandle_t task, uint32_t* basePriority, uint32_t* currentPriority);
+
 
 /*
  * Defines the prototype to which the application task hook function must
@@ -913,6 +918,7 @@ UBaseType_t uxTaskPriorityGetFromISR( const TaskHandle_t xTask ) PRIVILEGED_FUNC
  * functions return value being tested by the calling task.
  */
 eTaskState eTaskGetState( TaskHandle_t xTask ) PRIVILEGED_FUNCTION;
+eTaskState eTaskGetState_ISR( TaskHandle_t xTask ) PRIVILEGED_FUNCTION; /*MOD*/
 
 /**
  * task. h

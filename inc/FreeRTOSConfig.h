@@ -46,6 +46,7 @@
 extern uint32_t SystemCoreClock;
 
 #define configUSE_PREEMPTION			1
+#define configUSE_TIME_SLICING          1
 #define configUSE_IDLE_HOOK				0
 #define configUSE_TICK_HOOK				0
 #define configCPU_CLOCK_HZ				( SystemCoreClock )
@@ -64,7 +65,7 @@ extern uint32_t SystemCoreClock;
 #define configUSE_MALLOC_FAILED_HOOK	1
 #define configUSE_APPLICATION_TASK_TAG	0
 #define configUSE_COUNTING_SEMAPHORES	0
-#define configGENERATE_RUN_TIME_STATS	0
+//#define configGENERATE_RUN_TIME_STATS	0
 #define configUSE_QUEUE_SETS			0
 
 /* Co-routine definitions. */
@@ -119,6 +120,15 @@ See hc. */
 /* Normal assert() semantics without relying on the provision of an assert.h
 header file. */
 #define configASSERT( x ) if( ( x ) == 0 ) { taskDISABLE_INTERRUPTS(); for( ;; ) __asm volatile( " NOP" ); }
+
+extern void initDebCnt(void);
+extern uint64_t debCnt(void);
+
+#define configGENERATE_RUN_TIME_STATS 1
+//#define configUSE_STATS_FORMATTING_FUNCTIONS 1
+#define portCONFIGURE_TIMER_FOR_RUN_TIME_STATS() initDebCnt()
+#define portGET_RUN_TIME_COUNTER_VALUE() debCnt()
+
 
 #endif /* FREERTOS_CONFIG_H */
 

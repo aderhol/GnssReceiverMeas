@@ -325,6 +325,22 @@ typedef struct tskTaskControlBlock 			/* The old naming convention is used to pr
 
 } tskTCB;
 
+uint32_t taskGetRunTimeCount(TaskHandle_t task)
+{
+    return task->ulRunTimeCounter;
+}
+
+void taskSetRunTimeCount(TaskHandle_t task, uint32_t cnt)
+{
+    task->ulRunTimeCounter = cnt;
+}
+
+void taskGetPriorities(TaskHandle_t task, uint32_t* basePriority, uint32_t* currentPriority)
+{
+    *basePriority = task->uxBasePriority;
+    *currentPriority = task->uxPriority;
+}
+
 /* The old tskTCB name is maintained above then typedefed to the new TCB_t name
 below to enable the use of older kernel aware debuggers. */
 typedef tskTCB TCB_t;
@@ -389,8 +405,8 @@ PRIVILEGED_DATA static volatile UBaseType_t uxSchedulerSuspended	= ( UBaseType_t
 
 	/* Do not move these variables to function scope as doing so prevents the
 	code working with debuggers that need to remove the static qualifier. */
-	PRIVILEGED_DATA static uint32_t ulTaskSwitchedInTime = 0UL;	/*< Holds the value of a timer/counter the last time a task was switched in. */
-	PRIVILEGED_DATA static uint32_t ulTotalRunTime = 0UL;		/*< Holds the total amount of execution time as defined by the run time counter clock. */
+	PRIVILEGED_DATA static uint64_t ulTaskSwitchedInTime = 0UL;	/*< Holds the value of a timer/counter the last time a task was switched in. */
+	PRIVILEGED_DATA static uint64_t ulTotalRunTime = 0UL;		/*< Holds the total amount of execution time as defined by the run time counter clock. */
 
 #endif
 
@@ -1461,6 +1477,94 @@ static void prvAddNewTaskToReadyList( TCB_t *pxNewTCB )
 
 		return eReturn;
 	} /*lint !e818 xTask cannot be a pointer to const because it is a typedef. */
+
+	/*Mod*/
+	eTaskState eTaskGetState_ISR( TaskHandle_t xTask )
+	    {
+	    eTaskState eReturn;
+	    List_t const * pxStateList, *pxDelayedList, *pxOverflowedDelayedList;
+	    const TCB_t * const pxTCB = xTask;
+
+	        configASSERT( pxTCB );
+
+	        if( pxTCB == pxCurrentTCB )
+	        {
+	            /* The task calling this function is querying its own state. */
+	            eReturn = eRunning;
+	        }
+	        else
+	        {
+	            //taskENTER_CRITICAL();
+	            {
+	                pxStateList = listLIST_ITEM_CONTAINER( &( pxTCB->xStateListItem ) );
+	                pxDelayedList = pxDelayedTaskList;
+	                pxOverflowedDelayedList = pxOverflowDelayedTaskList;
+	            }
+	            //taskEXIT_CRITICAL();
+
+	            if( ( pxStateList == pxDelayedList ) || ( pxStateList == pxOverflowedDelayedList ) )
+	            {
+	                /* The task being queried is referenced from one of the Blocked
+	                lists. */
+	                eReturn = eBlocked;
+	            }
+
+	            #if ( INCLUDE_vTaskSuspend == 1 )
+	                else if( pxStateList == &xSuspendedTaskList )
+	                {
+	                    /* The task being queried is referenced from the suspended
+	                    list.  Is it genuinely suspended or is it blocked
+	                    indefinitely? */
+	                    if( listLIST_ITEM_CONTAINER( &( pxTCB->xEventListItem ) ) == NULL )
+	                    {
+	                        #if( configUSE_TASK_NOTIFICATIONS == 1 )
+	                        {
+	                            /* The task does not appear on the event list item of
+	                            and of the RTOS objects, but could still be in the
+	                            blocked state if it is waiting on its notification
+	                            rather than waiting on an object. */
+	                            if( pxTCB->ucNotifyState == taskWAITING_NOTIFICATION )
+	                            {
+	                                eReturn = eBlocked;
+	                            }
+	                            else
+	                            {
+	                                eReturn = eSuspended;
+	                            }
+	                        }
+	                        #else
+	                        {
+	                            eReturn = eSuspended;
+	                        }
+	                        #endif
+	                    }
+	                    else
+	                    {
+	                        eReturn = eBlocked;
+	                    }
+	                }
+	            #endif
+
+	            #if ( INCLUDE_vTaskDelete == 1 )
+	                else if( ( pxStateList == &xTasksWaitingTermination ) || ( pxStateList == NULL ) )
+	                {
+	                    /* The task being queried is referenced from the deleted
+	                    tasks list, or it is not referenced from any lists at
+	                    all. */
+	                    eReturn = eDeleted;
+	                }
+	            #endif
+
+	            else /*lint !e525 Negative indentation is intended to make use of pre-processor clearer. */
+	            {
+	                /* If the task is not in any other state, it must be in the
+	                Ready (including pending ready) state. */
+	                eReturn = eReady;
+	            }
+	        }
+
+	        return eReturn;
+	    } /*lint !e818 xTask cannot be a pointer to const because it is a typedef. */
 
 #endif /* INCLUDE_eTaskGetState */
 /*-----------------------------------------------------------*/

@@ -58,6 +58,9 @@ extern void xPortSysTickHandler(void);
 extern void xPortPendSVHandler(void);
 extern void vPortSVCHandler(void);
 
+//Debug (main)
+extern void ISR_TIMER1_A(void);
+
 //UART0
 extern void uart0_ISR(void);
 
@@ -80,6 +83,14 @@ extern void ISR_TIMER2_B(void);
 extern void ISR_TIMER3_A(void);
 extern void ISR_TIMER3_B(void);
 
+//WDT
+extern void ISR_WDT(void);
+extern void ISR_WDT_NmiSR(void);
+extern void ISR_WDT_HardFault(void);
+extern void ISR_WDT_MpuFault(void);
+extern void ISR_WDT_BusFault(void);
+extern void ISR_WDT_UsageFault(void);
+
 //*****************************************************************************
 //
 // The vector table.  Note that the proper constructs must be placed on this to
@@ -93,11 +104,11 @@ void (* const g_pfnVectors[])(void) =
     (void (*)(void))((uint32_t)&__STACK_TOP),
                                             // The initial stack pointer
     ResetISR,                               // The reset handler
-    NmiSR,                                  // The NMI handler
-    FaultISR,                               // The hard fault handler
-    IntDefaultHandler,                      // The MPU fault handler
-    IntDefaultHandler,                      // The bus fault handler
-    IntDefaultHandler,                      // The usage fault handler
+    ISR_WDT_NmiSR,                                  // The NMI handler
+    ISR_WDT_HardFault,                       // The hard fault handler
+    ISR_WDT_MpuFault,                      // The MPU fault handler
+    ISR_WDT_BusFault,                      // The bus fault handler
+    ISR_WDT_UsageFault,                      // The usage fault handler
     0,                                      // Reserved
     0,                                      // Reserved
     0,                                      // Reserved
@@ -125,10 +136,10 @@ void (* const g_pfnVectors[])(void) =
     IntDefaultHandler,                      // ADC Sequence 1
     IntDefaultHandler,                      // ADC Sequence 2
     IntDefaultHandler,                      // ADC Sequence 3
-    IntDefaultHandler,                      // Watchdog timer
+    ISR_WDT,                      // Watchdog timer
     ISR_TIMER0_A,                      // Timer 0 subtimer A
     IntDefaultHandler,                      // Timer 0 subtimer B
-    IntDefaultHandler,                      // Timer 1 subtimer A
+    ISR_TIMER1_A,                      // Timer 1 subtimer A
     IntDefaultHandler,                      // Timer 1 subtimer B
     ISR_TIMER2_A,                      // Timer 2 subtimer A
     ISR_TIMER2_B,                      // Timer 2 subtimer B

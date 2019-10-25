@@ -26,6 +26,8 @@ extern void uartInit(void);
 extern void sensorHubInit(TickType_t maxDelay_ticks);
 extern void skewMeasInit(void);
 extern void commandInit(void);
+extern void wdtInit(void);
+void eepromIoInit(void);
 
 
 void init(TickType_t maxDelay_ticks)
@@ -39,6 +41,8 @@ void init(TickType_t maxDelay_ticks)
     
     FPUEnable(); //enables the floating point unit
 
+    eepromIoInit(); //initializes the EEPROM interface
+
     interruptInit(); //sets up the NVIC
     
     heartBeatLedInit(); //initializes the hearBeatLED
@@ -50,4 +54,9 @@ void init(TickType_t maxDelay_ticks)
     skewMeasInit(); //initializes the skew measurement
 
     commandInit(); //initializes the command terminal
+
+
+
+
+    wdtInit(); //enables the Watchdog Timer
 }
