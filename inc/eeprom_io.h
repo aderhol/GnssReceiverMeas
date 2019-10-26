@@ -6,8 +6,11 @@
 #include <stddef.h>
 
 //addresses need to align on word boundaries (uint32_t), so the address needs to be divisible by 4
-#define EEPROM_ADD_CAUSE    (0)
-#define EEPROM_ADD_DESCRIPTOR_BASE (4)
+#define EEPROM_ADD_RESET_CAUSE (0) //32 bits + 32 bits CRC
+#define EEPROM_ADD_PREV_RESET_CAUSE_VALID (8) //16 bits + 16 bits CRC
+#define EEPROM_ADD_PREV_RESET_CAUSE (12) //32 bits + 32 bits CRC
+#define EEPROM_ADD_CAUSE    (20) //16 bits + 16 bits CRC
+#define EEPROM_ADD_DESCRIPTOR_BASE (24)
 
 bool eepromGetVerifiedValue_ui16_ISR(uint32_t address, uint16_t* data_out);
 void eepromWriteWithVerification_ui16_ISR(uint32_t address, uint16_t data);

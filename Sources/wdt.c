@@ -30,7 +30,11 @@ static const float wdtPeriod_ms = 500; //the period of the WDT
 static const uint16_t faultCause_none = 0;
 static const uint16_t faultCause_wdt0 = 1;
 
-static const uint32_t eepromAdd_cause = EEPROM_ADD_CAUSE; //the address of the fault resets cause
+
+static const uint32_t eepromAdd_reset_cause = EEPROM_ADD_RESET_CAUSE; //the address of the saved reset cause register
+static const uint32_t eepromAdd_prv_reset_cause_valid = EEPROM_ADD_PREV_RESET_CAUSE_VALID; //the address of the value indicating if the saved previous reset cause is valid (1->valid)
+static const uint32_t eepromAdd_prv_reset_cause = EEPROM_ADD_PREV_RESET_CAUSE; //the address of the saved previous reset cause register
+static const uint32_t eepromAdd_cause = EEPROM_ADD_CAUSE; //the address of the fault reset's cause
 static const uint32_t eepromAdd_descriptor_base = EEPROM_ADD_DESCRIPTOR_BASE; //the base address of the fault descriptor
 
 
@@ -205,7 +209,8 @@ void wdtInit(void)
 {
     wdtPeriod_clockTicks = (wdtPeriod_ms) * (SystemCoreClock / 1000.f); //calculates the WDT period in clock cycles
 
-    SysCtlResetBehaviorSet(SYSCTL_ONRST_WDOG0_POR | SYSCTL_ONRST_BOR_POR);
+    SysCtlResetBehaviorSet(SYSCTL_ONRST_WDOG0_POR | SYSCTL_ONRST_BOR_POR | SYSCTL_ONRST_EXT_POR);//all three (WDT, BOR, and POR) causes a system reset (if the reset is enabled)
+    SysCtlVoltageEventConfig(SYSCTL_VEVENT_VDDABO_RST | SYSCTL_VEVENT_VDDBO_RST); //Brown-Out on both, Vdda and Vdd causes a reset
 
     //
     // Enable the Watchdog 0 peripheral
@@ -285,6 +290,80 @@ static void wdtInit_task(void* pvParameters)
     uint32_t resetCause = SysCtlResetCauseGet();
     static char msg[100] = {'\0'};
 
+
+    {//save the reset's cause
+        bool crcOK;
+
+        uint32_t prvCause;
+        crcOK = eepromGetVerifiedValue_ui32_ISR(eepromAdd_reset_cause, &prvCause);
+        if(crcOK){
+            eepromWriteWithVerification_ui16_ISR(eepromAdd_prv_reset_cause_valid, 1u); //OK
+            eepromWriteWithVerification_ui32_ISR(eepromAdd_prv_reset_cause, prvCause);
+        }
+        else{
+            eepromWriteWithVerification_ui16_ISR(eepromAdd_prv_reset_cause_valid, 2u); //CRC error
+            eepromWriteWithVerification_ui32_ISR(eepromAdd_prv_reset_cause, prvCause);
+        }
+
+        eepromWriteWithVerification_ui32_ISR(eepromAdd_reset_cause, resetCause);
+    }
+
+
+    if(resetCause & SYSCTL_CAUSE_POR){
+            SysCtlResetCauseClear(SYSCTL_CAUSE_POR);
+            uartPrint(usb, "\r\n\r\n  >> Power On Reset\r\n\r\n");
+    }
+
+    if(resetCause & SYSCTL_CAUSE_EXT){
+        SysCtlResetCauseClear(SYSCTL_CAUSE_EXT);
+        uartPrint(usb, "\r\n\r\n>>>>>>>>>>>>>>>>>>>>>>>>>> EXT RESET <<<<<<<<<<<<<<<<<<<<<<<<<\r\n\r\n");
+    }
+
+    if(resetCause & SYSCTL_CAUSE_HIB){
+        SysCtlResetCauseClear(SYSCTL_CAUSE_HIB);
+        uartPrint(usb, "\r\n\r\n!!!!!!!!!!!!!!!!!!!!!!!!!! HIB RESET !!!!!!!!!!!!!!!!!!!!!!!!!\r\n\r\n");
+    }
+
+    if(resetCause & SYSCTL_CAUSE_HSRVREQ){
+        SysCtlResetCauseClear(SYSCTL_CAUSE_HSRVREQ);
+        uartPrint(usb, "\r\n\r\n?????????????????????????? HSRV RESET ?????????????????????????\r\n\r\n");
+    }
+
+    if(resetCause & SYSCTL_CAUSE_BOR){
+        SysCtlResetCauseClear(SYSCTL_CAUSE_BOR);
+        uartPrint(usb, "\r\n\r\n************************** BOR RESET [");
+
+        uint32_t voltageEvents;
+        voltageEvents = SysCtlVoltageEventStatus(); // Read the current voltage event status.
+        SysCtlVoltageEventClear(voltageEvents); // Clear all the current voltage events.
+
+        bool addComma = false;
+
+        if(voltageEvents & SYSCTL_VESTAT_VDDBOR){
+            uartPrint(usb, "Vdd");
+
+            addComma = true;
+        }
+        if(voltageEvents & SYSCTL_VESTAT_VDDABOR){
+            if(addComma){
+                uartPrint(usb, ", Vdda");
+            }
+            else{
+                uartPrint(usb, "Vdda");
+            }
+
+            addComma = true;
+        }
+
+
+        uartPrint(usb, "] *************************\r\n\r\n");
+    }
+
+    if(resetCause & SYSCTL_CAUSE_WDOG1){
+            SysCtlResetCauseClear(SYSCTL_CAUSE_WDOG1);
+            uartPrint(usb, "\r\n\r\n|||||||||||||||||||||||||| WDT1 RESET |||||||||||||||||||||||||\r\n\r\n");
+    }
+
     if(resetCause & SYSCTL_CAUSE_WDOG0){
         SysCtlResetCauseClear(SYSCTL_CAUSE_WDOG0);
         uartPrint(usb, "\r\n\r\n########################## WDT RESET #########################\r\n\r\n");
@@ -316,7 +395,7 @@ static void wdtInit_task(void* pvParameters)
     }
 
     if(resetCause & SYSCTL_CAUSE_SW){
-        SysCtlResetCauseClear(SYSCTL_CAUSE_WDOG0);
+        SysCtlResetCauseClear(SYSCTL_CAUSE_SW);
         uartPrint(usb, "\r\n\r\n-------------------------- SW RESET -------------------------\r\n\r\n");
 
         bool crcOK;

@@ -11,10 +11,12 @@
 #include <message_buffer.h>
 
 //driver includes
+#include <driverlib/sysctl.h>
 
 //user includes
 #include <uartIO.h>
 #include <utility.h>
+#include <eeprom_io.h>
 
 
 
@@ -44,6 +46,7 @@ void commandInit(void)
 }
 
 extern size_t xPortGetFreeHeapSize( void );
+static void printResetCause(UartPort port, uint32_t resetCause, char* msg);
 static void interpreter_task(void* pvParameters)
 {
     static char str[512];
@@ -95,7 +98,68 @@ static void interpreter_task(void* pvParameters)
                 else{ //incorrect usage
                     const char usage[] = "Error: incorrect usage\r\n"
                             "\tUsage:\r\n"
-                            "\t\theaprem\r\n";
+                            "\t\theapRem\r\n";
+                    uartPrint(usb, usage);
+                }
+            }
+            else if(strcmp_bool(command, "resetcause")){
+                if(NULL == strtok_r(NULL, delimStr, &work)){ //no other tokens
+                    bool crcOK;
+                    msg[0] = '\0';
+                    const uint32_t eepromAdd_reset_cause = EEPROM_ADD_RESET_CAUSE; //the address of the saved reset cause register
+                    const uint32_t eepromAdd_prv_reset_cause_valid = EEPROM_ADD_PREV_RESET_CAUSE_VALID; //the address of the value indicating if the saved previous reset cause is valid (1->valid)
+                    const uint32_t eepromAdd_prv_reset_cause = EEPROM_ADD_PREV_RESET_CAUSE; //the address of the saved previous reset cause register
+
+                    strcat(msg, "Reset cause(s): ");
+
+                    uint32_t cause;
+                    crcOK = eepromGetVerifiedValue_ui32_ISR(eepromAdd_reset_cause, &cause);
+                    printResetCause(usb, cause, msg);
+                    if(crcOK){
+                        strcat(msg, "\r\n");
+                    }
+                    else{
+                        strcat(msg, " (bad CRC)\r\n");
+                    }
+
+                    strcat(msg, "Previous reset's cause(s): ");
+
+                    uint32_t prvCause;
+                    crcOK = eepromGetVerifiedValue_ui32_ISR(eepromAdd_prv_reset_cause, &prvCause);
+                    printResetCause(usb, prvCause, msg);
+                    if(!crcOK){
+                        strcat(msg, " (bad CRC)");
+                    }
+
+                    uint16_t prvValid;
+                    crcOK = eepromGetVerifiedValue_ui16_ISR(eepromAdd_prv_reset_cause_valid, &prvValid);
+                    if(!crcOK){
+                        strcat(msg, " (valid: bad CRC)");
+                    }
+
+                    switch(prvValid){
+                    case 1u:
+                        break;
+
+                    case 2u:
+                        strcat(msg, " (invalid: saved status had bad CRC)");
+                        break;
+
+                    default:
+                        strcat(msg, " (invalid: ");
+                        appendInt64(msg, prvValid, 10, false);
+                        strcat(msg, ")");
+                        break;
+                    }
+
+                    strcat(msg, "\r\n-----\r\n");
+
+                    uartPrintLn(usb, msg);
+                }
+                else{ //incorrect usage
+                    const char usage[] = "Error: incorrect usage\r\n"
+                            "\tUsage:\r\n"
+                            "\t\tresetCause\r\n";
                     uartPrint(usb, usage);
                 }
             }
@@ -107,6 +171,72 @@ static void interpreter_task(void* pvParameters)
         //needs heap2
         /*vTaskGetRunTimeStats(str);
         uartPrint(usb, str);*/
+    }
+}
+
+static void printResetCause(UartPort port, uint32_t resetCause, char* msg)
+{
+    bool useComma = false;
+
+    if(resetCause & SYSCTL_CAUSE_POR){
+        strcat(msg, "POR");
+        useComma = true;
+    }
+
+    if(resetCause & SYSCTL_CAUSE_EXT){
+        if(useComma){
+            strcat(msg, ", ");
+        }
+        strcat(msg, "EXT");
+        useComma = true;
+    }
+
+    if(resetCause & SYSCTL_CAUSE_HIB){
+        if(useComma){
+            strcat(msg, ", ");
+        }
+        strcat(msg, "HIB");
+        useComma = true;
+    }
+
+    if(resetCause & SYSCTL_CAUSE_HSRVREQ){
+        if(useComma){
+            strcat(msg, ", ");
+        }
+        strcat(msg, "HSRV");
+        useComma = true;
+    }
+
+    if(resetCause & SYSCTL_CAUSE_BOR){
+        if(useComma){
+            strcat(msg, ", ");
+        }
+        strcat(msg, "BOR");
+        useComma = true;
+    }
+
+    if(resetCause & SYSCTL_CAUSE_WDOG0){
+        if(useComma){
+            strcat(msg, ", ");
+        }
+        strcat(msg, "WDOG0");
+        useComma = true;
+    }
+
+    if(resetCause & SYSCTL_CAUSE_WDOG1){
+        if(useComma){
+            strcat(msg, ", ");
+        }
+        strcat(msg, "WDOG1");
+        useComma = true;
+    }
+
+    if(resetCause & SYSCTL_CAUSE_SW){
+        if(useComma){
+            strcat(msg, ", ");
+        }
+        strcat(msg, "SW");
+        useComma = true;
     }
 }
 
