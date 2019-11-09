@@ -2586,7 +2586,7 @@ TCB_t *pxTCB;
 
 #if ( configUSE_TRACE_FACILITY == 1 )
 
-	UBaseType_t uxTaskGetSystemState( TaskStatus_t * const pxTaskStatusArray, const UBaseType_t uxArraySize, uint32_t * const pulTotalRunTime )
+	UBaseType_t uxTaskGetSystemState( TaskStatus_t * const pxTaskStatusArray, const UBaseType_t uxArraySize, uint64_t * const pulTotalRunTime )
 	{
 	UBaseType_t uxTask = 0, uxQueue = configMAX_PRIORITIES;
 

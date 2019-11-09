@@ -47,10 +47,11 @@ void commandInit(void)
 
 extern size_t xPortGetFreeHeapSize( void );
 static void printResetCause(UartPort port, uint32_t resetCause, char* msg);
+extern int32_t debTickToS(uint64_t numOfTicks);
 static void interpreter_task(void* pvParameters)
 {
     static char str[512];
-    static char msg[512]; //work buffer for string building
+    static char msg[2048]; //work buffer for string building
 
     while(true){
         bool OK = 0 != xMessageBufferReceive(commandBuffer,
@@ -160,6 +161,53 @@ static void interpreter_task(void* pvParameters)
                     const char usage[] = "Error: incorrect usage\r\n"
                             "\tUsage:\r\n"
                             "\t\tresetCause\r\n";
+                    uartPrint(usb, usage);
+                }
+            }
+            else if(strcmp_bool(command, "getstats")){
+                if(NULL == strtok_r(NULL, delimStr, &work)){ //no other tokens
+                    msg[0] = '\0';
+
+                    static TaskStatus_t tasks[50];
+                    uint64_t totalRunTime;
+
+                    size_t numOfTasks = uxTaskGetSystemState(tasks,
+                                                            sizeof(tasks) / sizeof(tasks[0]),
+                                                            &totalRunTime);
+
+                    strcat(msg, "Statistics\r\nNumber of Tasks: ");
+                    appendUInt64(msg, numOfTasks, 10);
+                    strcat(msg, "  Total Runtime: ");
+                    appendUInt64(msg, debTickToS(totalRunTime), 10);
+                    strcat(msg, " s\r\n--------------------\r\nBase Priority\tMinimum Stack Cushion [words]\tTotal Runtime\tCPU Usage\r\n");
+
+                    size_t i;
+                    for(i = 0; i < numOfTasks; i++){
+                        strcat(msg, "\r\n");
+                        strcat(msg, tasks[i].pcTaskName);
+                        strcat(msg, "\r\n");
+
+                        appendUInt64(msg, tasks[i].uxBasePriority, 10);
+                        strcat(msg, "\t");
+
+                        appendUInt64(msg, tasks[i].usStackHighWaterMark, 10);
+                        strcat(msg, "\t");
+
+                        appendUInt64(msg, debTickToS(tasks[i].ulRunTimeCounter), 10);
+                        strcat(msg, " s\t");
+
+                        appendFloat(msg, (((float)tasks[i].ulRunTimeCounter) / ((float)totalRunTime)) * 100, 3, 10, false);
+                        strcat(msg, "%\t");
+                    }
+
+                    strcat(msg, "\r\n-----\r\n");
+
+                    uartPrintLn(usb, msg);
+                }
+                else{ //incorrect usage
+                    const char usage[] = "Error: incorrect usage\r\n"
+                            "\tUsage:\r\n"
+                            "\t\tgetStats\r\n";
                     uartPrint(usb, usage);
                 }
             }

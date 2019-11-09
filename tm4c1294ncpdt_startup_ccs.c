@@ -30,9 +30,9 @@
 //
 //*****************************************************************************
 void ResetISR(void);
-static void NmiSR(void);
-static void FaultISR(void);
-static void IntDefaultHandler(void);
+//static void NmiSR(void);
+//static void FaultISR(void);
+//static void IntDefaultHandler(void);
 
 //*****************************************************************************
 //
@@ -90,6 +90,7 @@ extern void ISR_WDT_HardFault(void);
 extern void ISR_WDT_MpuFault(void);
 extern void ISR_WDT_BusFault(void);
 extern void ISR_WDT_UsageFault(void);
+extern void ISR_Default(void);
 
 //*****************************************************************************
 //
@@ -114,123 +115,123 @@ void (* const g_pfnVectors[])(void) =
     0,                                      // Reserved
     0,                                      // Reserved
     vPortSVCHandler,                      // SVCall handler
-    IntDefaultHandler,                      // Debug monitor handler
+    ISR_Default,                      // Debug monitor handler
     0,                                      // Reserved
     xPortPendSVHandler,                      // The PendSV handler
     xPortSysTickHandler,                      // The SysTick handler
-    IntDefaultHandler,                      // GPIO Port A
-    IntDefaultHandler,                      // GPIO Port B
-    IntDefaultHandler,                      // GPIO Port C
-    IntDefaultHandler,                      // GPIO Port D
-    IntDefaultHandler,                      // GPIO Port E
+    ISR_Default,                      // GPIO Port A
+    ISR_Default,                      // GPIO Port B
+    ISR_Default,                      // GPIO Port C
+    ISR_Default,                      // GPIO Port D
+    ISR_Default,                      // GPIO Port E
     uart0_ISR,                      // UART0 Rx and Tx
-    IntDefaultHandler,                      // UART1 Rx and Tx
-    IntDefaultHandler,                      // SSI0 Rx and Tx
-    IntDefaultHandler,                      // I2C0 Master and Slave
-    IntDefaultHandler,                      // PWM Fault
-    IntDefaultHandler,                      // PWM Generator 0
-    IntDefaultHandler,                      // PWM Generator 1
-    IntDefaultHandler,                      // PWM Generator 2
-    IntDefaultHandler,                      // Quadrature Encoder 0
-    IntDefaultHandler,                      // ADC Sequence 0
-    IntDefaultHandler,                      // ADC Sequence 1
-    IntDefaultHandler,                      // ADC Sequence 2
-    IntDefaultHandler,                      // ADC Sequence 3
+    ISR_Default,                      // UART1 Rx and Tx
+    ISR_Default,                      // SSI0 Rx and Tx
+    ISR_Default,                      // I2C0 Master and Slave
+    ISR_Default,                      // PWM Fault
+    ISR_Default,                      // PWM Generator 0
+    ISR_Default,                      // PWM Generator 1
+    ISR_Default,                      // PWM Generator 2
+    ISR_Default,                      // Quadrature Encoder 0
+    ISR_Default,                      // ADC Sequence 0
+    ISR_Default,                      // ADC Sequence 1
+    ISR_Default,                      // ADC Sequence 2
+    ISR_Default,                      // ADC Sequence 3
     ISR_WDT,                      // Watchdog timer
     ISR_TIMER0_A,                      // Timer 0 subtimer A
-    IntDefaultHandler,                      // Timer 0 subtimer B
+    ISR_Default,                      // Timer 0 subtimer B
     ISR_TIMER1_A,                      // Timer 1 subtimer A
-    IntDefaultHandler,                      // Timer 1 subtimer B
+    ISR_Default,                      // Timer 1 subtimer B
     ISR_TIMER2_A,                      // Timer 2 subtimer A
     ISR_TIMER2_B,                      // Timer 2 subtimer B
-    IntDefaultHandler,                      // Analog Comparator 0
-    IntDefaultHandler,                      // Analog Comparator 1
-    IntDefaultHandler,                      // Analog Comparator 2
-    IntDefaultHandler,                      // System Control (PLL, OSC, BO)
-    IntDefaultHandler,                      // FLASH Control
-    IntDefaultHandler,                      // GPIO Port F
-    IntDefaultHandler,                      // GPIO Port G
-    IntDefaultHandler,                      // GPIO Port H
-    IntDefaultHandler,                      // UART2 Rx and Tx
-    IntDefaultHandler,                      // SSI1 Rx and Tx
+    ISR_Default,                      // Analog Comparator 0
+    ISR_Default,                      // Analog Comparator 1
+    ISR_Default,                      // Analog Comparator 2
+    ISR_Default,                      // System Control (PLL, OSC, BO)
+    ISR_Default,                      // FLASH Control
+    ISR_Default,                      // GPIO Port F
+    ISR_Default,                      // GPIO Port G
+    ISR_Default,                      // GPIO Port H
+    ISR_Default,                      // UART2 Rx and Tx
+    ISR_Default,                      // SSI1 Rx and Tx
     ISR_TIMER3_A,                      // Timer 3 subtimer A
     ISR_TIMER3_B,                      // Timer 3 subtimer B
-    IntDefaultHandler,                      // I2C1 Master and Slave
-    IntDefaultHandler,                      // CAN0
-    IntDefaultHandler,                      // CAN1
-    IntDefaultHandler,                      // Ethernet
-    IntDefaultHandler,                      // Hibernate
-    IntDefaultHandler,                      // USB0
-    IntDefaultHandler,                      // PWM Generator 3
-    IntDefaultHandler,                      // uDMA Software Transfer
-    IntDefaultHandler,                      // uDMA Error
-    IntDefaultHandler,                      // ADC1 Sequence 0
-    IntDefaultHandler,                      // ADC1 Sequence 1
-    IntDefaultHandler,                      // ADC1 Sequence 2
-    IntDefaultHandler,                      // ADC1 Sequence 3
-    IntDefaultHandler,                      // External Bus Interface 0
-    IntDefaultHandler,                      // GPIO Port J
-    IntDefaultHandler,                      // GPIO Port K
-    IntDefaultHandler,                      // GPIO Port L
-    IntDefaultHandler,                      // SSI2 Rx and Tx
-    IntDefaultHandler,                      // SSI3 Rx and Tx
+    ISR_Default,                      // I2C1 Master and Slave
+    ISR_Default,                      // CAN0
+    ISR_Default,                      // CAN1
+    ISR_Default,                      // Ethernet
+    ISR_Default,                      // Hibernate
+    ISR_Default,                      // USB0
+    ISR_Default,                      // PWM Generator 3
+    ISR_Default,                      // uDMA Software Transfer
+    ISR_Default,                      // uDMA Error
+    ISR_Default,                      // ADC1 Sequence 0
+    ISR_Default,                      // ADC1 Sequence 1
+    ISR_Default,                      // ADC1 Sequence 2
+    ISR_Default,                      // ADC1 Sequence 3
+    ISR_Default,                      // External Bus Interface 0
+    ISR_Default,                      // GPIO Port J
+    ISR_Default,                      // GPIO Port K
+    ISR_Default,                      // GPIO Port L
+    ISR_Default,                      // SSI2 Rx and Tx
+    ISR_Default,                      // SSI3 Rx and Tx
     uart3_ISR,                      // UART3 Rx and Tx
     uart4_ISR,                      // UART4 Rx and Tx
-    IntDefaultHandler,                      // UART5 Rx and Tx
+    ISR_Default,                      // UART5 Rx and Tx
     uart6_ISR,                      // UART6 Rx and Tx
-    IntDefaultHandler,                      // UART7 Rx and Tx
-    IntDefaultHandler,                      // I2C2 Master and Slave
-    IntDefaultHandler,                      // I2C3 Master and Slave
-    IntDefaultHandler,                      // Timer 4 subtimer A
-    IntDefaultHandler,                      // Timer 4 subtimer B
-    IntDefaultHandler,                      // Timer 5 subtimer A
-    IntDefaultHandler,                      // Timer 5 subtimer B
-    IntDefaultHandler,                      // FPU
+    ISR_Default,                      // UART7 Rx and Tx
+    ISR_Default,                      // I2C2 Master and Slave
+    ISR_Default,                      // I2C3 Master and Slave
+    ISR_Default,                      // Timer 4 subtimer A
+    ISR_Default,                      // Timer 4 subtimer B
+    ISR_Default,                      // Timer 5 subtimer A
+    ISR_Default,                      // Timer 5 subtimer B
+    ISR_Default,                      // FPU
     0,                                      // Reserved
     0,                                      // Reserved
-    IntDefaultHandler,                      // I2C4 Master and Slave
-    IntDefaultHandler,                      // I2C5 Master and Slave
-    IntDefaultHandler,                      // GPIO Port M
-    IntDefaultHandler,                      // GPIO Port N
+    ISR_Default,                      // I2C4 Master and Slave
+    ISR_Default,                      // I2C5 Master and Slave
+    ISR_Default,                      // GPIO Port M
+    ISR_Default,                      // GPIO Port N
     0,                                      // Reserved
-    IntDefaultHandler,                      // Tamper
-    IntDefaultHandler,                      // GPIO Port P (Summary or P0)
-    IntDefaultHandler,                      // GPIO Port P1
-    IntDefaultHandler,                      // GPIO Port P2
-    IntDefaultHandler,                      // GPIO Port P3
-    IntDefaultHandler,                      // GPIO Port P4
-    IntDefaultHandler,                      // GPIO Port P5
-    IntDefaultHandler,                      // GPIO Port P6
-    IntDefaultHandler,                      // GPIO Port P7
-    IntDefaultHandler,                      // GPIO Port Q (Summary or Q0)
-    IntDefaultHandler,                      // GPIO Port Q1
-    IntDefaultHandler,                      // GPIO Port Q2
-    IntDefaultHandler,                      // GPIO Port Q3
-    IntDefaultHandler,                      // GPIO Port Q4
-    IntDefaultHandler,                      // GPIO Port Q5
-    IntDefaultHandler,                      // GPIO Port Q6
-    IntDefaultHandler,                      // GPIO Port Q7
-    IntDefaultHandler,                      // GPIO Port R
-    IntDefaultHandler,                      // GPIO Port S
-    IntDefaultHandler,                      // SHA/MD5 0
-    IntDefaultHandler,                      // AES 0
-    IntDefaultHandler,                      // DES3DES 0
-    IntDefaultHandler,                      // LCD Controller 0
-    IntDefaultHandler,                      // Timer 6 subtimer A
-    IntDefaultHandler,                      // Timer 6 subtimer B
-    IntDefaultHandler,                      // Timer 7 subtimer A
-    IntDefaultHandler,                      // Timer 7 subtimer B
-    IntDefaultHandler,                      // I2C6 Master and Slave
+    ISR_Default,                      // Tamper
+    ISR_Default,                      // GPIO Port P (Summary or P0)
+    ISR_Default,                      // GPIO Port P1
+    ISR_Default,                      // GPIO Port P2
+    ISR_Default,                      // GPIO Port P3
+    ISR_Default,                      // GPIO Port P4
+    ISR_Default,                      // GPIO Port P5
+    ISR_Default,                      // GPIO Port P6
+    ISR_Default,                      // GPIO Port P7
+    ISR_Default,                      // GPIO Port Q (Summary or Q0)
+    ISR_Default,                      // GPIO Port Q1
+    ISR_Default,                      // GPIO Port Q2
+    ISR_Default,                      // GPIO Port Q3
+    ISR_Default,                      // GPIO Port Q4
+    ISR_Default,                      // GPIO Port Q5
+    ISR_Default,                      // GPIO Port Q6
+    ISR_Default,                      // GPIO Port Q7
+    ISR_Default,                      // GPIO Port R
+    ISR_Default,                      // GPIO Port S
+    ISR_Default,                      // SHA/MD5 0
+    ISR_Default,                      // AES 0
+    ISR_Default,                      // DES3DES 0
+    ISR_Default,                      // LCD Controller 0
+    ISR_Default,                      // Timer 6 subtimer A
+    ISR_Default,                      // Timer 6 subtimer B
+    ISR_Default,                      // Timer 7 subtimer A
+    ISR_Default,                      // Timer 7 subtimer B
+    ISR_Default,                      // I2C6 Master and Slave
     I2C7_ISR,                      // I2C7 Master and Slave
-    IntDefaultHandler,                      // HIM Scan Matrix Keyboard 0
-    IntDefaultHandler,                      // One Wire 0
-    IntDefaultHandler,                      // HIM PS/2 0
-    IntDefaultHandler,                      // HIM LED Sequencer 0
-    IntDefaultHandler,                      // HIM Consumer IR 0
-    IntDefaultHandler,                      // I2C8 Master and Slave
-    IntDefaultHandler,                      // I2C9 Master and Slave
-    IntDefaultHandler,                      // GPIO Port T
-    IntDefaultHandler,                      // Fan 1
+    ISR_Default,                      // HIM Scan Matrix Keyboard 0
+    ISR_Default,                      // One Wire 0
+    ISR_Default,                      // HIM PS/2 0
+    ISR_Default,                      // HIM LED Sequencer 0
+    ISR_Default,                      // HIM Consumer IR 0
+    ISR_Default,                      // I2C8 Master and Slave
+    ISR_Default,                      // I2C9 Master and Slave
+    ISR_Default,                      // GPIO Port T
+    ISR_Default,                      // Fan 1
     0,                                      // Reserved
 };
 

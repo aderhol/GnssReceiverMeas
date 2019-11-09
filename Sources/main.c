@@ -137,7 +137,7 @@ void initDebCnt(void)
         while(!SysCtlPeripheralReady(SYSCTL_PERIPH_TIMER1)){}
     }
 
-    TimerClockSourceSet(TIMER1_BASE, TIMER_CLOCK_SYSTEM);  //TIMER0 is clocked from the system clock
+    TimerClockSourceSet(TIMER1_BASE, TIMER_CLOCK_SYSTEM);  //TIMER1 is clocked from the system clock
 
     TimerConfigure(TIMER1_BASE, (TIMER_CFG_SPLIT_PAIR | TIMER_CFG_A_PERIODIC_UP)); //configures TIMER1
 
@@ -154,6 +154,11 @@ void initDebCnt(void)
 int32_t debTickToMs(uint64_t numOfTicks)
 {
     return (numOfTicks * (float)(1201.0 / 120000.0)) + 0.5f;
+}
+
+int32_t debTickToS(uint64_t numOfTicks)
+{
+    return (numOfTicks * (float)(1201.0 / 120000000.0)) + 0.5f;
 }
 
 uint64_t debTime = 0;

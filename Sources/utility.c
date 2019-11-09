@@ -138,6 +138,49 @@ bool appendInt64(char* str, int64_t val, size_t maxLength, bool addComma)
     }
 }
 
+bool appendUInt64(char* str, uint64_t val, size_t maxLength)
+{
+    if (maxLength <= 0) { //if there is absolutely no space
+        return false;
+    }
+
+    for (; (*str) != '\0'; str++); //get to the end
+    char* head = str;
+
+    size_t i = 0;
+
+    if (0 == val) {
+        head[i++] = '0';
+
+        head[i] = '\0';
+
+        return true;
+    }
+
+    while (0 != val && i < maxLength) {
+        head[i++] = '0' + (val % 10);
+        val /= 10u;
+    }
+
+    head[i] = '\0';
+
+    if (i >= maxLength && 0 != val) { //if the number was too long
+        return false;
+    }
+    else { //reverse the order
+        char* A = head;
+        char* B = head + (i - 1);
+
+        for (; A < B; (A++, B--)) {
+            char ch = *A;
+            *A = *B;
+            *B = ch;
+        }
+
+        return true;
+    }
+}
+
 bool appendFloat(char* str, float val, size_t precision, size_t maxLength, bool addComma)
 {
     if((1 + 1 + precision) > maxLength){ //X.X...X
@@ -171,13 +214,20 @@ bool appendFloat(char* str, float val, size_t precision, size_t maxLength, bool 
     for(; (*str) != '\0'; str++); //get to the end
     char* head = str;
 
-
+    bool biased;
+    if(fabsf(val) < 1.0f && val != 0.0f){
+        biased = true;
+        val += (val >= 0) ? 1 : -1;
+    }
+    else{
+        biased = false;
+    }
     for(i = 0; i < precision; i++){
         val *= 10.0f;
     }
 
     //rounding
-    if(val >= 0){
+    if(val >= 0.0f){
         val += 0.5f;
     }
     else{
@@ -193,13 +243,13 @@ bool appendFloat(char* str, float val, size_t precision, size_t maxLength, bool 
 
         i = 0;
 
-        if(iVal < 0){ //if negative
+        if(iVal < 0.0f){ //if negative
             *(head++) = '-';
             maxLength--;
             iVal *= -1;
         }
 
-        if(0 == iVal){
+        if(0.0f == iVal){
             head[i++] ='0';
             if(precision > 0){
                 head[i++] ='.';
@@ -228,6 +278,10 @@ bool appendFloat(char* str, float val, size_t precision, size_t maxLength, bool 
                 head[i++] = '0' + (iVal % 10);
                 iVal /= 10;
             }
+        }
+
+        if(biased){
+            head[i - 1] = '0'; //zero the added 1
         }
 
         head[i] = '\0';

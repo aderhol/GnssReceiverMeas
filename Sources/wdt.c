@@ -29,6 +29,17 @@ static const float wdtPeriod_ms = 500; //the period of the WDT
 
 static const uint16_t faultCause_none = 0;
 static const uint16_t faultCause_wdt0 = 1;
+static const uint16_t faultCause_wdt1 = 2;
+static const uint16_t faultCause_moscFailNmi = 3;
+static const uint16_t faultCause_tamperNmi = 4;
+static const uint16_t faultCause_powerNmi = 5;
+static const uint16_t faultCause_extNmi = 6;
+
+static const uint16_t faultCause_hardFault = 7;
+static const uint16_t faultCause_mpuFault = 8;
+static const uint16_t faultCause_busFault = 9;
+static const uint16_t faultCause_usageFault = 10;
+static const uint16_t faultCause_unexpectedInterrupt = 11;
 
 
 static const uint32_t eepromAdd_reset_cause = EEPROM_ADD_RESET_CAUSE; //the address of the saved reset cause register
@@ -43,8 +54,124 @@ const uint32_t eepromAdd_wdt_PC = eepromAdd_wdt_totTime + 8; //the address of th
 const uint32_t eepromAdd_wdt_nameLen = eepromAdd_wdt_PC + 8;
 const uint32_t eepromAdd_wdt_name = eepromAdd_wdt_nameLen + 4;
 
+const uint32_t eepromAdd_unexpectedInt_pend0 = eepromAdd_descriptor_base;
+const uint32_t eepromAdd_unexpectedInt_pend1 = eepromAdd_unexpectedInt_pend0 + 8;
+const uint32_t eepromAdd_unexpectedInt_pend2 = eepromAdd_unexpectedInt_pend1 + 8;
+const uint32_t eepromAdd_unexpectedInt_pend3 = eepromAdd_unexpectedInt_pend2 + 8;
+const uint32_t eepromAdd_unexpectedInt_active0 = eepromAdd_unexpectedInt_pend3 + 8;
+const uint32_t eepromAdd_unexpectedInt_active1 = eepromAdd_unexpectedInt_active0 + 8;
+const uint32_t eepromAdd_unexpectedInt_active2 = eepromAdd_unexpectedInt_active1 + 8;
+const uint32_t eepromAdd_unexpectedInt_active3 = eepromAdd_unexpectedInt_active2 + 8;
+
+const uint32_t eepromAdd_hardFault_PC = eepromAdd_descriptor_base;
+const uint32_t eepromAdd_hardFault_memoryManagementFaultAddress = eepromAdd_hardFault_PC + 8;
+const uint32_t eepromAdd_hardFault_busFaultAddress = eepromAdd_hardFault_memoryManagementFaultAddress + 8;
+const uint32_t eepromAdd_hardFault_configurableFaultStatus = eepromAdd_hardFault_busFaultAddress + 8;
+const uint32_t eepromAdd_hardFault_hardFaultStatus = eepromAdd_hardFault_configurableFaultStatus + 8;
+
+const uint32_t eepromAdd_mpuFault_PC = eepromAdd_descriptor_base;
+const uint32_t eepromAdd_mpuFault_memoryManagementFaultAddress = eepromAdd_mpuFault_PC + 8;
+const uint32_t eepromAdd_mpuFault_configurableFaultStatus = eepromAdd_mpuFault_memoryManagementFaultAddress + 8;
+
+const uint32_t eepromAdd_busFault_PC = eepromAdd_descriptor_base;
+const uint32_t eepromAdd_busFault_busFaultAddress = eepromAdd_busFault_PC + 8;
+const uint32_t eepromAdd_busFault_configurableFaultStatus = eepromAdd_busFault_busFaultAddress + 8;
+
+const uint32_t eepromAdd_usageFault_PC = eepromAdd_descriptor_base;
+const uint32_t eepromAdd_usageFault_configurableFaultStatus = eepromAdd_usageFault_PC + 8;
+
 extern uint32_t __get_PSP(void);
+extern uint32_t __get_MSP(void);
 extern bool getTaskList(TaskHandle_t (*taskList)[], size_t* numberOfTasks, size_t outputArrayLenght);
+
+const uint32_t CORE_PREIPHERAL_REGISTERS_BASE_ADDRESS = 0xE000E000;
+
+
+void ISR_WDT_HardFault(void)
+{
+    uint32_t PC = *(((volatile uint32_t*)__get_PSP()) + 6); //gets the program counter where execution would resume after the ISR
+
+    uint32_t memoryManagmentFaultAddress = HWREG(CORE_PREIPHERAL_REGISTERS_BASE_ADDRESS + 0xD34u);
+    uint32_t busFaultAddress = HWREG(CORE_PREIPHERAL_REGISTERS_BASE_ADDRESS + 0xD38u);
+
+    uint32_t configurableFaultStatus = HWREG(CORE_PREIPHERAL_REGISTERS_BASE_ADDRESS + 0xD28u);
+    uint32_t hardFaultStatus = HWREG(CORE_PREIPHERAL_REGISTERS_BASE_ADDRESS + 0xD2Cu);
+
+    eepromWriteWithVerification_ui16_ISR(eepromAdd_cause, faultCause_hardFault);
+
+    eepromWriteWithVerification_ui32_ISR(eepromAdd_hardFault_PC, PC);
+    eepromWriteWithVerification_ui32_ISR(eepromAdd_hardFault_memoryManagementFaultAddress, memoryManagmentFaultAddress);
+    eepromWriteWithVerification_ui32_ISR(eepromAdd_hardFault_busFaultAddress, busFaultAddress);
+    eepromWriteWithVerification_ui32_ISR(eepromAdd_hardFault_configurableFaultStatus, configurableFaultStatus);
+    eepromWriteWithVerification_ui32_ISR(eepromAdd_hardFault_hardFaultStatus, hardFaultStatus);
+
+    SysCtlReset();
+}
+
+void ISR_WDT_MpuFault(void)
+{
+    uint32_t PC = *(((volatile uint32_t*)__get_PSP()) + 6); //gets the program counter where execution would resume after the ISR
+
+    uint32_t memoryManagmentFaultAddress = HWREG(CORE_PREIPHERAL_REGISTERS_BASE_ADDRESS + 0xD34u);
+
+    uint32_t configurableFaultStatus = HWREG(CORE_PREIPHERAL_REGISTERS_BASE_ADDRESS + 0xD28u);
+
+    eepromWriteWithVerification_ui16_ISR(eepromAdd_cause, faultCause_mpuFault);
+
+    eepromWriteWithVerification_ui32_ISR(eepromAdd_mpuFault_PC, PC);
+    eepromWriteWithVerification_ui32_ISR(eepromAdd_mpuFault_memoryManagementFaultAddress, memoryManagmentFaultAddress);
+    eepromWriteWithVerification_ui32_ISR(eepromAdd_mpuFault_configurableFaultStatus, configurableFaultStatus);
+
+    SysCtlReset();
+}
+
+void ISR_WDT_BusFault(void)
+{
+    uint32_t PC = *(((volatile uint32_t*)__get_PSP()) + 6); //gets the program counter where execution would resume after the ISR
+
+    uint32_t busFaultAddress = HWREG(CORE_PREIPHERAL_REGISTERS_BASE_ADDRESS + 0xD38u);
+
+    uint32_t configurableFaultStatus = HWREG(CORE_PREIPHERAL_REGISTERS_BASE_ADDRESS + 0xD28u);
+
+    eepromWriteWithVerification_ui16_ISR(eepromAdd_cause, faultCause_busFault);
+
+    eepromWriteWithVerification_ui32_ISR(eepromAdd_busFault_PC, PC);
+    eepromWriteWithVerification_ui32_ISR(eepromAdd_busFault_busFaultAddress, busFaultAddress);
+    eepromWriteWithVerification_ui32_ISR(eepromAdd_busFault_configurableFaultStatus, configurableFaultStatus);
+
+    SysCtlReset();
+}
+
+void ISR_WDT_UsageFault(void)
+{
+    uint32_t PC = *(((volatile uint32_t*)__get_PSP()) + 6); //gets the program counter where execution would resume after the ISR
+
+    uint32_t configurableFaultStatus = HWREG(CORE_PREIPHERAL_REGISTERS_BASE_ADDRESS + 0xD28u);
+
+    eepromWriteWithVerification_ui16_ISR(eepromAdd_cause, faultCause_usageFault);
+
+    eepromWriteWithVerification_ui32_ISR(eepromAdd_usageFault_PC, PC);
+    eepromWriteWithVerification_ui32_ISR(eepromAdd_usageFault_configurableFaultStatus, configurableFaultStatus);
+
+    SysCtlReset();
+}
+
+void ISR_Default(void)
+{
+    eepromWriteWithVerification_ui16_ISR(eepromAdd_cause, faultCause_unexpectedInterrupt);
+
+    eepromWriteWithVerification_ui32_ISR(eepromAdd_unexpectedInt_pend0, HWREG(NVIC_BASE + 0x200u));
+    eepromWriteWithVerification_ui32_ISR(eepromAdd_unexpectedInt_pend1, HWREG(NVIC_BASE + 0x204u));
+    eepromWriteWithVerification_ui32_ISR(eepromAdd_unexpectedInt_pend2, HWREG(NVIC_BASE + 0x208u));
+    eepromWriteWithVerification_ui32_ISR(eepromAdd_unexpectedInt_pend3, HWREG(NVIC_BASE + 0x20Cu));
+
+    eepromWriteWithVerification_ui32_ISR(eepromAdd_unexpectedInt_active0, HWREG(NVIC_BASE + 0x300u));
+    eepromWriteWithVerification_ui32_ISR(eepromAdd_unexpectedInt_active1, HWREG(NVIC_BASE + 0x304u));
+    eepromWriteWithVerification_ui32_ISR(eepromAdd_unexpectedInt_active2, HWREG(NVIC_BASE + 0x308u));
+    eepromWriteWithVerification_ui32_ISR(eepromAdd_unexpectedInt_active3, HWREG(NVIC_BASE + 0x30Cu));
+
+    SysCtlReset();
+}
 
 void ISR_WDT(void);
 
@@ -148,28 +275,9 @@ secondCall:
     }
 
     if(SysCtlPeripheralReady(SYSCTL_PERIPH_WDOG1) && WatchdogIntStatus(WATCHDOG1_BASE, true)){ //if the interrupt is caused by WDT1
-        while(true); //init error
+        eepromWriteWithVerification_ui16_ISR(eepromAdd_cause, faultCause_wdt1);
+        SysCtlReset();
     }
-}
-
-void ISR_WDT_HardFault(void)
-{
-    //reset
-}
-
-void ISR_WDT_MpuFault(void)
-{
-    //reset
-}
-
-void ISR_WDT_BusFault(void)
-{
-    //reset
-}
-
-void ISR_WDT_UsageFault(void)
-{
-    //reset
 }
 
 void ISR_WDT_NmiSR(void)
@@ -178,11 +286,13 @@ void ISR_WDT_NmiSR(void)
     SysCtlNMIClear(source);
 
     if(source & SYSCTL_NMI_MOSCFAIL){ //the main oscillator is not present or did not start
-        //
+        eepromWriteWithVerification_ui16_ISR(eepromAdd_cause, faultCause_moscFailNmi);
+        SysCtlReset();
     }
 
     if(source & SYSCTL_NMI_TAMPER){ //a tamper event has been detected
-        //
+        eepromWriteWithVerification_ui16_ISR(eepromAdd_cause, faultCause_tamperNmi);
+        SysCtlReset();
     }
 
     if(source & (SYSCTL_NMI_WDT0 | SYSCTL_NMI_WDT1)){ //watchdog 0 or 1 generated a timeout
@@ -190,11 +300,13 @@ void ISR_WDT_NmiSR(void)
     }
 
     if(source & SYSCTL_NMI_POWER){ //a power event occurred
-        //
+        eepromWriteWithVerification_ui16_ISR(eepromAdd_cause, faultCause_powerNmi);
+        SysCtlReset();
     }
 
     if(source & SYSCTL_NMI_EXTERNAL){ //an external NMI pin asserted
-        //
+        eepromWriteWithVerification_ui16_ISR(eepromAdd_cause, faultCause_extNmi);
+        SysCtlReset();
     }
 }
 
@@ -412,8 +524,38 @@ static void wdtInit_task(void* pvParameters)
         }
         else
         {
-            if(cause == faultCause_wdt0){
+            if(faultCause_wdt0 == cause){
                 uartPrintLn(usb, "Fault Cause: WDT0");
+            }
+            else if(faultCause_wdt1 == cause){
+                uartPrintLn(usb, "Fault Cause: WDT1");
+            }
+            else if(faultCause_moscFailNmi == cause){
+                uartPrintLn(usb, "Fault Cause: MOSC Fail NMI");
+            }
+            else if(faultCause_tamperNmi == cause){
+                uartPrintLn(usb, "Fault Cause: tamper NMI");
+            }
+            else if(faultCause_powerNmi == cause){
+                uartPrintLn(usb, "Fault Cause: power NMI");
+            }
+            else if(faultCause_extNmi == cause){
+                uartPrintLn(usb, "Fault Cause: external NMI");
+            }
+            else if(faultCause_unexpectedInterrupt == cause){
+                uartPrintLn(usb, "Fault Cause: unexpected interrupt");
+            }
+            else if(faultCause_hardFault == cause){
+                uartPrintLn(usb, "Fault Cause: hard fault");
+            }
+            else if(faultCause_mpuFault == cause){
+                uartPrintLn(usb, "Fault Cause: MPU fault");
+            }
+            else if(faultCause_busFault == cause){
+                uartPrintLn(usb, "Fault Cause: bus fault");
+            }
+            else if(faultCause_usageFault == cause){
+                uartPrintLn(usb, "Fault Cause: usage fault");
             }
             else{
                 uartPrintLn(usb, "Unexpected cause");
@@ -459,6 +601,297 @@ static void faultCauseHandler(uint16_t cause)
     static char msg[100] = {'\0'};
 
     switch(cause){
+    case faultCause_hardFault:{
+        bool crcOK;
+
+        uint32_t hardFaultStatus;
+        crcOK = eepromGetVerifiedValue_ui32_ISR(eepromAdd_hardFault_hardFaultStatus, &hardFaultStatus);
+        msg[0] = '\0';
+        appendInt64(msg, (int64_t)hardFaultStatus, 99, false);
+        uartPrint(usb, "Hard Fault Status: ");
+        uartPrint(usb, msg);
+        if(crcOK){
+            uartPrintLn(usb, "");
+        }
+        else{
+            uartPrintLn(usb, " (bad CRC)");
+        }
+
+        uint32_t configurableFaultStatus;
+        crcOK = eepromGetVerifiedValue_ui32_ISR(eepromAdd_hardFault_configurableFaultStatus, &configurableFaultStatus);
+        msg[0] = '\0';
+        appendInt64(msg, (int64_t)configurableFaultStatus, 99, false);
+        uartPrint(usb, "Configurable Fault Status: ");
+        uartPrint(usb, msg);
+        if(crcOK){
+            uartPrintLn(usb, "");
+        }
+        else{
+            uartPrintLn(usb, " (bad CRC)");
+        }
+
+        uint32_t busFaultAddress;
+        crcOK = eepromGetVerifiedValue_ui32_ISR(eepromAdd_hardFault_busFaultAddress, &busFaultAddress);
+        msg[0] = '\0';
+        appendInt64(msg, (int64_t)busFaultAddress, 99, false);
+        uartPrint(usb, "Bus Fault Address: ");
+        uartPrint(usb, msg);
+        if(crcOK){
+            uartPrintLn(usb, "");
+        }
+        else{
+            uartPrintLn(usb, " (bad CRC)");
+        }
+
+        uint32_t memoryManagementFaultAddress;
+        crcOK = eepromGetVerifiedValue_ui32_ISR(eepromAdd_hardFault_memoryManagementFaultAddress, &memoryManagementFaultAddress);
+        msg[0] = '\0';
+        appendInt64(msg, (int64_t)memoryManagementFaultAddress, 99, false);
+        uartPrint(usb, "Memory Management Fault Address: ");
+        uartPrint(usb, msg);
+        if(crcOK){
+            uartPrintLn(usb, "");
+        }
+        else{
+            uartPrintLn(usb, " (bad CRC)");
+        }
+
+        uint32_t PC;
+        crcOK = eepromGetVerifiedValue_ui32_ISR(eepromAdd_hardFault_PC, &PC);
+        msg[0] = '\0';
+        appendInt64(msg, (int64_t)PC, 99, false);
+        uartPrint(usb, "Program Counter: ");
+        uartPrint(usb, msg);
+        if(crcOK){
+            uartPrintLn(usb, "");
+        }
+        else{
+            uartPrintLn(usb, " (bad CRC)");
+        }
+    }
+    break;
+
+    case faultCause_mpuFault:{
+        bool crcOK;
+
+        uint32_t configurableFaultStatus;
+        crcOK = eepromGetVerifiedValue_ui32_ISR(eepromAdd_mpuFault_configurableFaultStatus, &configurableFaultStatus);
+        msg[0] = '\0';
+        appendInt64(msg, (int64_t)configurableFaultStatus, 99, false);
+        uartPrint(usb, "Configurable Fault Status: ");
+        uartPrint(usb, msg);
+        if(crcOK){
+            uartPrintLn(usb, "");
+        }
+        else{
+            uartPrintLn(usb, " (bad CRC)");
+        }
+
+        uint32_t memoryManagementFaultAddress;
+        crcOK = eepromGetVerifiedValue_ui32_ISR(eepromAdd_mpuFault_memoryManagementFaultAddress, &memoryManagementFaultAddress);
+        msg[0] = '\0';
+        appendInt64(msg, (int64_t)memoryManagementFaultAddress, 99, false);
+        uartPrint(usb, "Memory Management Fault Address: ");
+        uartPrint(usb, msg);
+        if(crcOK){
+            uartPrintLn(usb, "");
+        }
+        else{
+            uartPrintLn(usb, " (bad CRC)");
+        }
+
+        uint32_t PC;
+        crcOK = eepromGetVerifiedValue_ui32_ISR(eepromAdd_mpuFault_PC, &PC);
+        msg[0] = '\0';
+        appendInt64(msg, (int64_t)PC, 99, false);
+        uartPrint(usb, "Program Counter: ");
+        uartPrint(usb, msg);
+        if(crcOK){
+            uartPrintLn(usb, "");
+        }
+        else{
+            uartPrintLn(usb, " (bad CRC)");
+        }
+    }
+    break;
+
+    case faultCause_busFault:{
+        bool crcOK;
+
+        uint32_t configurableFaultStatus;
+        crcOK = eepromGetVerifiedValue_ui32_ISR(eepromAdd_busFault_configurableFaultStatus, &configurableFaultStatus);
+        msg[0] = '\0';
+        appendInt64(msg, (int64_t)configurableFaultStatus, 99, false);
+        uartPrint(usb, "Configurable Fault Status: ");
+        uartPrint(usb, msg);
+        if(crcOK){
+            uartPrintLn(usb, "");
+        }
+        else{
+            uartPrintLn(usb, " (bad CRC)");
+        }
+
+        uint32_t busFaultAddress;
+        crcOK = eepromGetVerifiedValue_ui32_ISR(eepromAdd_busFault_busFaultAddress, &busFaultAddress);
+        msg[0] = '\0';
+        appendInt64(msg, (int64_t)busFaultAddress, 99, false);
+        uartPrint(usb, "Bus Fault Address: ");
+        uartPrint(usb, msg);
+        if(crcOK){
+            uartPrintLn(usb, "");
+        }
+        else{
+            uartPrintLn(usb, " (bad CRC)");
+        }
+
+        uint32_t PC;
+        crcOK = eepromGetVerifiedValue_ui32_ISR(eepromAdd_busFault_PC, &PC);
+        msg[0] = '\0';
+        appendInt64(msg, (int64_t)PC, 99, false);
+        uartPrint(usb, "Program Counter: ");
+        uartPrint(usb, msg);
+        if(crcOK){
+            uartPrintLn(usb, "");
+        }
+        else{
+            uartPrintLn(usb, " (bad CRC)");
+        }
+    }
+    break;
+
+    case faultCause_usageFault:{
+        bool crcOK;
+
+        uint32_t configurableFaultStatus;
+        crcOK = eepromGetVerifiedValue_ui32_ISR(eepromAdd_usageFault_configurableFaultStatus, &configurableFaultStatus);
+        msg[0] = '\0';
+        appendInt64(msg, (int64_t)configurableFaultStatus, 99, false);
+        uartPrint(usb, "Configurable Fault Status: ");
+        uartPrint(usb, msg);
+        if(crcOK){
+            uartPrintLn(usb, "");
+        }
+        else{
+            uartPrintLn(usb, " (bad CRC)");
+        }
+
+        uint32_t PC;
+        crcOK = eepromGetVerifiedValue_ui32_ISR(eepromAdd_usageFault_PC, &PC);
+        msg[0] = '\0';
+        appendInt64(msg, (int64_t)PC, 99, false);
+        uartPrint(usb, "Program Counter: ");
+        uartPrint(usb, msg);
+        if(crcOK){
+            uartPrintLn(usb, "");
+        }
+        else{
+            uartPrintLn(usb, " (bad CRC)");
+        }
+    }
+    break;
+
+    case faultCause_unexpectedInterrupt:{
+        uint32_t dat;
+        bool crcOK;
+
+        crcOK = eepromGetVerifiedValue_ui32_ISR(eepromAdd_unexpectedInt_pend0, &dat);
+        msg[0] = '\0';
+        appendInt64(msg, (int64_t)dat, 99, false);
+        uartPrint(usb, "PEND0: ");
+        uartPrint(usb, msg);
+        if(crcOK){
+            uartPrintLn(usb, "");
+        }
+        else{
+            uartPrintLn(usb, " (bad CRC)");
+        }
+
+        crcOK = eepromGetVerifiedValue_ui32_ISR(eepromAdd_unexpectedInt_pend1, &dat);
+        msg[0] = '\0';
+        appendInt64(msg, (int64_t)dat, 99, false);
+        uartPrint(usb, "PEND1: ");
+        uartPrint(usb, msg);
+        if(crcOK){
+            uartPrintLn(usb, "");
+        }
+        else{
+            uartPrintLn(usb, " (bad CRC)");
+        }
+
+        crcOK = eepromGetVerifiedValue_ui32_ISR(eepromAdd_unexpectedInt_pend2, &dat);
+        msg[0] = '\0';
+        appendInt64(msg, (int64_t)dat, 99, false);
+        uartPrint(usb, "PEND2: ");
+        uartPrint(usb, msg);
+        if(crcOK){
+            uartPrintLn(usb, "");
+        }
+        else{
+            uartPrintLn(usb, " (bad CRC)");
+        }
+
+        crcOK = eepromGetVerifiedValue_ui32_ISR(eepromAdd_unexpectedInt_pend3, &dat);
+        msg[0] = '\0';
+        appendInt64(msg, (int64_t)dat, 99, false);
+        uartPrint(usb, "PEND3: ");
+        uartPrint(usb, msg);
+        if(crcOK){
+            uartPrintLn(usb, "");
+        }
+        else{
+            uartPrintLn(usb, " (bad CRC)");
+        }
+
+        crcOK = eepromGetVerifiedValue_ui32_ISR(eepromAdd_unexpectedInt_active0, &dat);
+        msg[0] = '\0';
+        appendInt64(msg, (int64_t)dat, 99, false);
+        uartPrint(usb, "ACTIVE0: ");
+        uartPrint(usb, msg);
+        if(crcOK){
+            uartPrintLn(usb, "");
+        }
+        else{
+            uartPrintLn(usb, " (bad CRC)");
+        }
+
+        crcOK = eepromGetVerifiedValue_ui32_ISR(eepromAdd_unexpectedInt_active1, &dat);
+        msg[0] = '\0';
+        appendInt64(msg, (int64_t)dat, 99, false);
+        uartPrint(usb, "ACTIVE1: ");
+        uartPrint(usb, msg);
+        if(crcOK){
+            uartPrintLn(usb, "");
+        }
+        else{
+            uartPrintLn(usb, " (bad CRC)");
+        }
+
+        crcOK = eepromGetVerifiedValue_ui32_ISR(eepromAdd_unexpectedInt_active2, &dat);
+        msg[0] = '\0';
+        appendInt64(msg, (int64_t)dat, 99, false);
+        uartPrint(usb, "ACTIVE2: ");
+        uartPrint(usb, msg);
+        if(crcOK){
+            uartPrintLn(usb, "");
+        }
+        else{
+            uartPrintLn(usb, " (bad CRC)");
+        }
+
+        crcOK = eepromGetVerifiedValue_ui32_ISR(eepromAdd_unexpectedInt_active3, &dat);
+        msg[0] = '\0';
+        appendInt64(msg, (int64_t)dat, 99, false);
+        uartPrint(usb, "ACTIVE3: ");
+        uartPrint(usb, msg);
+        if(crcOK){
+            uartPrintLn(usb, "");
+        }
+        else{
+            uartPrintLn(usb, " (bad CRC)");
+        }
+    }
+    break;
+
     case faultCause_wdt0:
     {
         uint32_t PC;
@@ -660,6 +1093,22 @@ static void faultCauseHandler(uint16_t cause)
         }
     }
         break;
+
+    case faultCause_wdt1:
+        break;
+
+    case faultCause_moscFailNmi:
+        break;
+
+    case faultCause_tamperNmi:
+        break;
+
+    case faultCause_powerNmi:
+        break;
+
+    case faultCause_extNmi:
+        break;
+
     default:
         uartPrintLn(usb, "ERROR: unknown cause");
         break;
