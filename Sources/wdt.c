@@ -208,7 +208,7 @@ void ISR_WDT(void)
         else{
             uint32_t totTime;
 secondCall:
-            totTime = debCnt() - timeOfFirstCall;
+            totTime = (uint32_t)(debCnt() - timeOfFirstCall);
             eepromWriteWithVerification_ui32_ISR(eepromAdd_wdt_totTime, debTickToMs(totTime));
 
             eepromWriteWithVerification_ui16_ISR(eepromAdd_cause, faultCause_wdt0);
@@ -248,7 +248,7 @@ secondCall:
                     eepromWriteWithVerification_ui16_ISR(nxtAdd, (uint16_t)state); //the PC
                     nxtAdd += 4;
 
-                    uint32_t taskTotTime = taskGetRunTimeCount(tasks[i]); //gets the tasks state
+                    uint32_t taskTotTime = (uint32_t)taskGetRunTimeCount(tasks[i]); //gets the tasks state
                     uint32_t taskRelTime = (totTime != 0) ? ((taskTotTime * 100 + (totTime / 2)) / totTime) : 0; //gets the percentage time the task run
                     eepromWriteWithVerification_ui16_ISR(nxtAdd, (uint16_t)taskRelTime);
                     nxtAdd += 4;

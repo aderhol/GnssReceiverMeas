@@ -655,8 +655,7 @@ static void init_skewMeas_task(void* pvParameters)
 
     bool OK;
 
-
-    char ubxMess[] = {0xB5, 0x62,   //sync chars
+    char ubxMessAnt[] = {0xB5, 0x62,   //sync chars
                       0x06,         //class
                       0x31,         //ID
                       0x20, 0x00,   //length
@@ -677,17 +676,17 @@ static void init_skewMeas_task(void* pvParameters)
 
                       0x00, 0x00};  //checksum
 
-    const size_t ubxMessLength = (sizeof(ubxMess) / sizeof(char));
+    const size_t ubxMessAntLength = (sizeof(ubxMessAnt) / sizeof(char));
 
     uint8_t CK_A = 0, CK_B = 0;
     size_t i;
-    for(i = 2; i < (ubxMessLength - 2); i++){
-        CK_A = CK_A + ubxMess[i];
+    for(i = 2; i < (ubxMessAntLength - 2); i++){
+        CK_A = CK_A + ubxMessAnt[i];
         CK_B = CK_B + CK_A;
     }
 
-    ubxMess[ubxMessLength - 2] = CK_A;
-    ubxMess[ubxMessLength - 1] = CK_B;
+    ubxMessAnt[ubxMessAntLength - 2] = CK_A;
+    ubxMessAnt[ubxMessAntLength - 1] = CK_B;
 
     OK = (pdTRUE == xSemaphoreTake(dutA_init_sem, pdMS_TO_TICKS(3000))); //get the receiver's type
     if(OK){ //if the current baud rate is the default baud rate (9600)
@@ -702,7 +701,8 @@ static void init_skewMeas_task(void* pvParameters)
                 uartPrintLn(dutA_toDut, "$PUBX,41,1,0007,0003,115200,0*18"); //sets the receiver's baud rate to 115200
                 uartReconfig(dutA_toDut, 115200); //modifies the port's baud rate to 115200
 
-                uartSend(dutA_toDut, ubxMess, ubxMessLength); //sets the receivers compensation for the antenna cable to 0 ns
+                uartPrintLn(dutA_toDut, "$PUBX,40,GNS,0,1,0,0,0,0*40"); //GNS message is turned on for UART1
+                uartSend(dutA_toDut, ubxMessAnt, ubxMessAntLength); //sets the receivers compensation for the antenna cable to 0 ns
                 break;
 
             default:
@@ -727,7 +727,8 @@ static void init_skewMeas_task(void* pvParameters)
                 break;
 
             case UBlox:
-                uartSend(dutA_toDut, ubxMess, ubxMessLength); //sets the receivers compensation for the antenna cable to 0 ns
+                uartPrintLn(dutA_toDut, "$PUBX,40,GNS,0,1,0,0,0,0*40"); //GNS message is turned on for UART1
+                uartSend(dutA_toDut, ubxMessAnt, ubxMessAntLength); //sets the receivers compensation for the antenna cable to 0 ns
                 break;
 
             default:
@@ -749,7 +750,8 @@ static void init_skewMeas_task(void* pvParameters)
                 uartPrintLn(dutB_toDut, "$PUBX,41,1,0007,0003,115200,0*18"); //sets the receiver's baud rate to 115200
                 uartReconfig(dutB_toDut, 115200); //modifies the port's baud rate to 115200
 
-                uartSend(dutB_toDut, ubxMess, ubxMessLength); //sets the receivers compensation for the antenna cable to 0 ns
+                uartPrintLn(dutA_toDut, "$PUBX,40,GNS,0,1,0,0,0,0*40"); //GNS message is turned on for UART1
+                uartSend(dutB_toDut, ubxMessAnt, ubxMessAntLength); //sets the receivers compensation for the antenna cable to 0 ns
                 break;
 
             default:
@@ -774,7 +776,8 @@ static void init_skewMeas_task(void* pvParameters)
                 break;
 
             case UBlox:
-                uartSend(dutB_toDut, ubxMess, ubxMessLength); //sets the receivers compensation for the antenna cable to 0 ns
+                uartPrintLn(dutA_toDut, "$PUBX,40,GNS,0,1,0,0,0,0*40"); //GNS message is turned on for UART1
+                uartSend(dutB_toDut, ubxMessAnt, ubxMessAntLength); //sets the receivers compensation for the antenna cable to 0 ns
                 break;
 
             default:

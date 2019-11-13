@@ -290,7 +290,7 @@ typedef struct tskTaskControlBlock 			/* The old naming convention is used to pr
 	#endif
 
 	#if( configGENERATE_RUN_TIME_STATS == 1 )
-		uint32_t		ulRunTimeCounter;	/*< Stores the amount of time the task has spent in the Running state. */
+		uint64_t		ulRunTimeCounter;	/*< Stores the amount of time the task has spent in the Running state. */
 	#endif
 
 	#if ( configUSE_NEWLIB_REENTRANT == 1 )
@@ -325,12 +325,12 @@ typedef struct tskTaskControlBlock 			/* The old naming convention is used to pr
 
 } tskTCB;
 
-uint32_t taskGetRunTimeCount(TaskHandle_t task)
+uint64_t taskGetRunTimeCount(TaskHandle_t task)
 {
     return task->ulRunTimeCounter;
 }
 
-void taskSetRunTimeCount(TaskHandle_t task, uint32_t cnt)
+void taskSetRunTimeCount(TaskHandle_t task, uint64_t cnt)
 {
     task->ulRunTimeCounter = cnt;
 }
